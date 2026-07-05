@@ -51,10 +51,17 @@ def fetch_roof_segments(latitude, longitude, api_key,
         )
 
     if response.status_code == 403:
+        try:
+            detail = response.json().get("error", {}).get("message", response.text)
+        except ValueError:
+            detail = response.text
         raise SolarApiError(
-            "Acces refuse par Google Solar API (403) : verifie que la cle est "
-            "valide, que la facturation est activee sur le projet Google Cloud, "
-            "et que l'API 'Solar API' est bien activee pour ce projet."
+            f"Acces refuse par Google Solar API (403) : {detail}\n\n"
+            "Causes les plus frequentes : facturation non activee sur le projet "
+            "Google Cloud, API 'Solar API' non activee (APIs & Services > Library), "
+            "ou cle restreinte (Application restrictions de type 'referrers HTTP', "
+            "incompatible avec un appel serveur — utiliser 'None' ou une "
+            "restriction par adresse IP a la place)."
         )
 
     if response.status_code != 200:
