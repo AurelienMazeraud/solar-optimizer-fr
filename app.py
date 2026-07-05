@@ -7,6 +7,7 @@ from src.pv import Roof
 from src.house import House
 from src.energy import EnergyBalance, Battery
 from src.finance import Investment
+from src.solar_api import fetch_roof_segments, SolarApiError
 
 
 st.set_page_config(
@@ -19,6 +20,11 @@ st.set_page_config(
 @st.cache_data(show_spinner="Recuperation des donnees meteo (PVGIS)...", ttl=60 * 60 * 24)
 def get_weather(lat, lon):
     return load_weather(lat, lon)
+
+
+@st.cache_data(show_spinner="Interrogation de Google Solar API...", ttl=60 * 60 * 24)
+def get_roof_segments(lat, lon, api_key):
+    return fetch_roof_segments(lat, lon, api_key)
 
 
 def load_defaults():
@@ -38,41 +44,80 @@ st.caption(
 )
 
 # ------------------------------------------------------------------
-# Nombre de pans de toiture : en dehors du formulaire pour que la mise
-# a jour du nombre de blocs soit immediate (les widgets dans un
-# st.form ne redeclenchent pas de calcul avant validation).
+# Localisation et nombre de pans de toiture : en dehors du formulaire
+# pour que la recherche automatique du toit et la mise a jour du nombre
+# de blocs soient immediates (les widgets dans un st.form ne
+# redeclenchent pas de calcul avant validation).
 # ------------------------------------------------------------------
+st.subheader("\U0001F4CD Localisation")
+c1, c2, c3 = st.columns(3)
+lat = c1.number_input(
+    "Latitude", min_value=-90.0, max_value=90.0,
+    value=float(cfg["site"]["latitude"]) if cfg else 48.815, format="%.4f",
+)
+lon = c2.number_input(
+    "Longitude", min_value=-180.0, max_value=180.0,
+    value=float(cfg["site"]["longitude"]) if cfg else 2.385, format="%.4f",
+)
+altitude = c3.number_input(
+    "Altitude (m)", min_value=0.0, max_value=4000.0,
+    value=float(cfg["site"]["altitude"]) if cfg else 45.0,
+)
+st.caption("Coordonnees du site : via une carte (clic droit -> coordonnees GPS).")
+
+with st.expander("\U0001F50E Reperage automatique du toit (Google Solar API, optionnel)"):
+    st.caption(
+        "Utilise la latitude/longitude ci-dessus pour recuperer automatiquement "
+        "l'inclinaison, l'azimut et la surface de chaque pan de toiture detecte. "
+        "10 000 requetes gratuites par mois chez Google — largement suffisant pour "
+        "un usage ponctuel."
+    )
+    default_key = ""
+    try:
+        default_key = st.secrets.get("GOOGLE_SOLAR_API_KEY", "")
+    except Exception:
+        default_key = ""
+    api_key = st.text_input(
+        "Cle API Google Solar",
+        value=default_key,
+        type="password",
+        help="Pour un usage durable/deploye, stocke plutot la cle dans "
+             "`.streamlit/secrets.toml` (GOOGLE_SOLAR_API_KEY = \"...\") — "
+             "ce fichier est deja exclu du depot Git.",
+    )
+    if st.button("Rechercher automatiquement mon toit"):
+        try:
+            segments = get_roof_segments(lat, lon, api_key)
+        except SolarApiError as exc:
+            st.error(str(exc))
+        else:
+            n_found = len(segments)
+            st.session_state["n_sections"] = min(max(n_found, 1), 4)
+            for i, seg in enumerate(segments):
+                st.session_state[f"tilt_{i}"] = int(round(seg["tilt"]))
+                st.session_state[f"az_{i}"] = int(round(seg["azimuth"]))
+                st.session_state[f"area_{i}"] = round(seg["area"], 1)
+            st.success(
+                f"{n_found} pan(s) de toiture detecte(s) et pre-remplis ci-dessous "
+                "(inclinaison, azimut, surface reelle du pan)."
+            )
+
 st.subheader("\U0001F3E0 Toiture(s)")
 n_sections = st.number_input(
     "Nombre de pans de toiture exploites",
     min_value=1, max_value=4, value=2, step=1,
+    key="n_sections",
 )
 
 defaults_roof = []
 if cfg:
-    for key in ("southwest", "northeast"):
-        r = cfg.get("roof", {}).get(key, {})
+    for key_name in ("southwest", "northeast"):
+        r = cfg.get("roof", {}).get(key_name, {})
         defaults_roof.append((r.get("tilt", 15), r.get("azimuth", 180), r.get("area", 20)))
 while len(defaults_roof) < 4:
     defaults_roof.append((15, 180, 20))
 
 with st.form("simulation"):
-
-    st.subheader("\U0001F4CD Localisation")
-    c1, c2, c3 = st.columns(3)
-    lat = c1.number_input(
-        "Latitude", min_value=-90.0, max_value=90.0,
-        value=float(cfg["site"]["latitude"]) if cfg else 48.815, format="%.4f",
-    )
-    lon = c2.number_input(
-        "Longitude", min_value=-180.0, max_value=180.0,
-        value=float(cfg["site"]["longitude"]) if cfg else 2.385, format="%.4f",
-    )
-    altitude = c3.number_input(
-        "Altitude (m)", min_value=0.0, max_value=4000.0,
-        value=float(cfg["site"]["altitude"]) if cfg else 45.0,
-    )
-    st.caption("Coordonnees du site : via une carte (clic droit -> coordonnees GPS).")
 
     roof_cols = st.columns(int(n_sections))
     roof_sections = []

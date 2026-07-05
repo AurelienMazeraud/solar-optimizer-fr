@@ -38,6 +38,23 @@ streamlit run app.py
 Cela ouvre l'application dans le navigateur, à l'adresse
 `http://localhost:8501`.
 
+### Repérage automatique du toit (Google Solar API, optionnel)
+
+Dans l'expander "🔎 Repérage automatique du toit", coller une clé Google
+Solar API pré-remplit l'inclinaison, l'azimut et la surface des pans de
+toiture détectés à l'adresse renseignée (10 000 requêtes gratuites/mois).
+
+Pour ne jamais committer la clé par erreur :
+
+```
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+```
+
+puis remplacer la valeur par la vraie clé dans ce fichier local
+(`.streamlit/secrets.toml` est déjà exclu par `.gitignore`). Sur Streamlit
+Community Cloud, la clé se configure plutôt dans les "Secrets" de l'app,
+depuis le tableau de bord — jamais dans le dépôt.
+
 ### Intégrer l'app dans une page internet
 
 Quelques options, du plus simple au plus autonome :
