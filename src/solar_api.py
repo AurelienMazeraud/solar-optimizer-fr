@@ -22,6 +22,8 @@ def fetch_roof_segments(latitude, longitude, api_key,
             "segments": [{"tilt": <degres>, "azimuth": <degres>, "area": <m2>}, ...],
             "max_panels_count": <int ou None>,
             "panel_capacity_watts": <float ou None>,
+            "panel_height_m": <float ou None>,
+            "panel_width_m": <float ou None>,
             "max_array_area_m2": <float ou None>,
         }
 
@@ -32,10 +34,14 @@ def fetch_roof_segments(latitude, longitude, api_key,
       - area (areaMeters2) : surface reelle du pan (deja corrigee de
         l'inclinaison, pas la projection au sol).
     - max_panels_count : nombre maximal de panneaux que Google estime
-      pouvoir installer sur ce toit (avec son propre modele de panneau,
-      voir panel_capacity_watts pour la puissance unitaire assumee).
+      pouvoir installer sur ce toit, avec SON propre panneau de reference
+      (voir panel_capacity_watts / panel_height_m / panel_width_m) — pas
+      forcement les memes dimensions que le panneau choisi dans le
+      formulaire, donc a prendre comme un ordre de grandeur.
     - panel_capacity_watts : puissance unitaire (Wc) du panneau de
       reference utilise par Google pour ce calcul.
+    - panel_height_m / panel_width_m : dimensions (m) de ce panneau de
+      reference, en orientation portrait.
     - max_array_area_m2 : surface totale occupee par cette configuration
       maximale.
 
@@ -129,5 +135,7 @@ def fetch_roof_segments(latitude, longitude, api_key,
         "segments": parsed[:max_segments],
         "max_panels_count": solar_potential.get("maxArrayPanelsCount"),
         "panel_capacity_watts": solar_potential.get("panelCapacityWatts"),
+        "panel_height_m": solar_potential.get("panelHeightMeters"),
+        "panel_width_m": solar_potential.get("panelWidthMeters"),
         "max_array_area_m2": solar_potential.get("maxArrayAreaMeters2"),
     }
