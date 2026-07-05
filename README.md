@@ -25,9 +25,11 @@ python main.py
 ## Interface web (Streamlit)
 
 `app.py` propose un formulaire (localisation, toiture(s), modules PV,
-consommation du foyer, financement, tarifs) et affiche les résultats
-(production, autoconsommation, temps de retour, VAN) avec des graphiques
-interactifs.
+consommation du foyer, batterie optionnelle, financement, tarifs) et
+affiche les résultats (production, autoconsommation, temps de retour, VAN)
+avec des graphiques interactifs. La batterie est simulée heure par heure
+(charge sur le surplus, décharge sur le manque, rendement aller-retour) et
+augmente mécaniquement le taux d'autoconsommation.
 
 ```
 streamlit run app.py

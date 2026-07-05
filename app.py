@@ -5,7 +5,7 @@ from src.config import load_config
 from src.weather import load_weather
 from src.pv import Roof
 from src.house import House
-from src.energy import EnergyBalance
+from src.energy import EnergyBalance, Battery
 from src.finance import Investment
 
 
@@ -32,9 +32,9 @@ cfg = load_defaults()
 
 st.title("☀️ Calculateur d'efficacite de panneau solaire")
 st.caption(
-    "Simulation de production photovoltaique, autoconsommation et retour sur "
-    "investissement, pour evaluer sa propre situation avant de rejoindre ou "
-    "constituer une communaute d'autoconsommation collective."
+    "Simulation de production photovoltaique, autoconsommation, batterie et "
+    "retour sur investissement, pour evaluer sa propre situation avant de "
+    "rejoindre ou constituer une communaute d'autoconsommation collective."
 )
 
 # ------------------------------------------------------------------
@@ -131,10 +131,38 @@ with st.form("simulation"):
         min_value=0, max_value=50000, value=0, step=100,
     )
 
+    st.subheader("\U0001F50B Batterie (optionnel)")
+    c1, c2, c3, c4 = st.columns(4)
+    battery_capacity = c1.number_input(
+        "Capacite utile (kWh) — 0 = pas de batterie",
+        min_value=0.0, max_value=100.0, value=0.0, step=0.5,
+    )
+    battery_power = c2.number_input(
+        "Puissance max. charge/decharge (kW)",
+        min_value=0.5, max_value=30.0, value=3.0, step=0.5,
+        help="Batteries residentielles courantes : 3 a 5 kW.",
+    )
+    battery_efficiency = c3.slider(
+        "Rendement aller-retour", 0.70, 1.0, 0.90,
+        help="Pertes de charge + decharge cumulees. Typique pour une batterie "
+             "lithium domestique : 0.85 a 0.95.",
+    )
+    battery_price_per_kwh = c4.number_input(
+        "Coût indicatif (€/kWh installe)",
+        min_value=0, max_value=2000, value=500, step=50,
+        help="Valeur indicative a verifier aupres d'un installateur — le prix "
+             "au kWh baisse avec la capacite et varie selon la technologie.",
+    )
+    if battery_capacity > 0:
+        st.caption(
+            f"Coût batterie estime : {battery_capacity * battery_price_per_kwh:.0f} € "
+            "(ajoute automatiquement au coût total de l'installation)."
+        )
+
     st.subheader("\U0001F4B6 Investissement & financement")
     c1, c2 = st.columns(2)
-    capex = c1.number_input(
-        "Cout total de l'installation, avant aides (€)",
+    capex_pv = c1.number_input(
+        "Coût de l'installation PV, avant aides (€)",
         min_value=0, max_value=200000, value=15000, step=500,
     )
     subsidies = c2.number_input(
@@ -233,17 +261,31 @@ if submitted:
             annual_target_kwh=annual_target if annual_target > 0 else None,
         )
         loads = house.total()
-        balance = EnergyBalance(total_production, loads["Total"]).compute()
+
+        battery = None
+        if battery_capacity > 0:
+            battery = Battery(
+                capacity_kwh=battery_capacity,
+                max_power_kw=battery_power,
+                round_trip_efficiency=battery_efficiency,
+            )
+
+        balance = EnergyBalance(total_production, loads["Total"], battery=battery).compute()
 
         annual_production = total_production.sum()
         annual_consumption = loads["Total"].sum()
         self_consumption = balance["SelfConsumption"].sum()
         export_kwh = balance["CommunityExport"].sum()
         grid_import = balance["GridImport"].sum()
+        battery_charge_kwh = balance["BatteryCharge"].sum()
+        battery_discharge_kwh = balance["BatteryDischarge"].sum()
         self_consumption_rate = (self_consumption / annual_production) if annual_production else 0
 
+        battery_capex = battery_capacity * battery_price_per_kwh
+        total_capex = capex_pv + battery_capex
+
         investment = Investment(
-            capex=capex, subsidies=subsidies, down_payment=down_payment,
+            capex=total_capex, subsidies=subsidies, down_payment=down_payment,
             loan_rate=loan_rate, loan_duration_years=loan_duration,
             price_self_consumption=price_self, price_export=price_export,
             price_inflation=price_inflation, panel_degradation=panel_degradation,
@@ -267,6 +309,13 @@ if submitted:
     k2.metric("Exporte / revendu", f"{export_kwh:.0f} kWh")
     k3.metric("Achete au reseau", f"{grid_import:.0f} kWh")
 
+    if battery is not None:
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Énergie stockée / an", f"{battery_charge_kwh:.0f} kWh")
+        k2.metric("Énergie restituée / an", f"{battery_discharge_kwh:.0f} kWh")
+        cycles = battery_charge_kwh / battery_capacity if battery_capacity else 0
+        k3.metric("Cycles équivalents / an", f"{cycles:.0f}")
+
     st.subheader("Résultats — investissement")
     k1, k2, k3 = st.columns(3)
     k1.metric("Coût net apres aides", f"{investment.net_cost:.0f} €")
@@ -275,6 +324,11 @@ if submitted:
         f"{payback:.1f} ans" if payback is not None else f"> {duration_years} ans",
     )
     k3.metric("VAN", f"{van:.0f} €")
+    if battery is not None:
+        st.caption(
+            f"Dont coût batterie estimé : {battery_capex:.0f} € "
+            f"({battery_capacity:.1f} kWh × {battery_price_per_kwh:.0f} €/kWh)."
+        )
 
     monthly = total_production.resample("ME").sum()
     fig1 = go.Figure(go.Bar(x=monthly.index.strftime("%b %Y"), y=monthly.values))
