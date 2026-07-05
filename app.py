@@ -10,7 +10,7 @@ from src.house import House
 from src.energy import EnergyBalance, Battery
 from src.finance import Investment
 from src.solar_api import fetch_roof_segments, SolarApiError
-from src.geocode import geocode_address, GeocodeError
+from src.geocode import geocode_address, search_addresses, GeocodeError
 
 
 st.set_page_config(
@@ -47,10 +47,10 @@ st.caption(
 )
 
 # ------------------------------------------------------------------
-# Localisation : carte interactive + recherche d'adresse + champs
-# precis. En dehors du formulaire pour une mise a jour immediate
-# (les widgets dans un st.form ne redeclenchent pas de calcul avant
-# validation).
+# Localisation : recherche d'adresse (avec suggestions a choisir) +
+# carte interactive + champs precis. En dehors du formulaire pour une
+# mise a jour immediate (les widgets dans un st.form ne redeclenchent
+# pas de calcul avant validation).
 # ------------------------------------------------------------------
 st.subheader("\U0001F4CD Localisation")
 
@@ -61,29 +61,47 @@ current_lat = st.session_state.get("lat", default_lat)
 current_lon = st.session_state.get("lon", default_lon)
 
 st.caption(
-    "Cherche une adresse ou clique directement sur la carte pour placer le "
-    "point — les champs latitude/longitude se mettent a jour automatiquement "
-    "(et restent modifiables a la main pour affiner)."
+    "Tape une adresse puis choisis-la dans la liste, ou clique directement "
+    "sur la carte pour placer le point — les champs latitude/longitude se "
+    "mettent a jour automatiquement (et restent modifiables a la main pour "
+    "affiner)."
 )
 
-address_col, button_col = st.columns([4, 1])
-address = address_col.text_input(
+address = st.text_input(
     "Rechercher une adresse", placeholder="ex : 12 rue de la Paix, Paris",
-    label_visibility="collapsed",
 )
-if button_col.button("Rechercher", use_container_width=True):
+
+if address and address != st.session_state.get("_last_geocoded_query"):
+    st.session_state["_last_geocoded_query"] = address
     try:
-        found_lat, found_lon = geocode_address(address)
+        st.session_state["_address_candidates"] = search_addresses(address, limit=5)
     except GeocodeError as exc:
+        st.session_state["_address_candidates"] = []
         st.warning(str(exc))
-    else:
-        st.session_state["lat"] = found_lat
-        st.session_state["lon"] = found_lon
-        current_lat, current_lon = found_lat, found_lon
-        st.success(f"Adresse trouvee : {found_lat:.4f}, {found_lon:.4f}")
+
+candidates = st.session_state.get("_address_candidates", [])
+if candidates:
+    labels = [c["label"] for c in candidates]
+    choice = st.selectbox(
+        "Résultats trouvés — sélectionne la bonne adresse",
+        labels, index=None, placeholder="Choisis une adresse...",
+        key="_address_choice",
+    )
+    if choice:
+        selected = candidates[labels.index(choice)]
+        selected_point = (selected["lat"], selected["lon"])
+        if st.session_state.get("_last_address_applied") != selected_point:
+            st.session_state["_last_address_applied"] = selected_point
+            st.session_state["lat"], st.session_state["lon"] = selected_point
+            current_lat, current_lon = selected_point
 
 location_map = folium.Map(location=[current_lat, current_lon], zoom_start=18)
-folium.Marker([current_lat, current_lon], tooltip="Position actuelle").add_to(location_map)
+folium.CircleMarker(
+    location=[current_lat, current_lon],
+    radius=9, color="#d62728", weight=2,
+    fill=True, fill_color="#d62728", fill_opacity=0.85,
+    tooltip="Position actuelle",
+).add_to(location_map)
 map_state = st_folium(location_map, height=350, width=None, key="location_map")
 
 clicked = map_state.get("last_clicked") if map_state else None
@@ -150,20 +168,34 @@ with st.expander("\U0001F50E Reperage automatique du toit (Google Solar API, opt
             st.error("Renseigne une clé API (ou configure-la côté serveur) avant de chercher.")
         else:
             try:
-                segments = get_roof_segments(lat, lon, api_key)
+                result = get_roof_segments(lat, lon, api_key)
             except SolarApiError as exc:
                 st.error(str(exc))
             else:
+                segments = result["segments"]
                 n_found = len(segments)
                 st.session_state["n_sections"] = min(max(n_found, 1), 4)
                 for i, seg in enumerate(segments):
                     st.session_state[f"tilt_{i}"] = int(round(seg["tilt"]))
                     st.session_state[f"az_{i}"] = int(round(seg["azimuth"]))
                     st.session_state[f"area_{i}"] = round(seg["area"], 1)
+
                 st.success(
                     f"{n_found} pan(s) de toiture detecte(s) et pre-remplis ci-dessous "
                     "(inclinaison, azimut, surface reelle du pan)."
                 )
+
+                max_panels = result.get("max_panels_count")
+                panel_w = result.get("panel_capacity_watts")
+                if max_panels:
+                    extra = (
+                        f" avec des panneaux d'environ {panel_w:.0f} Wc (modèle de référence Google)"
+                        if panel_w else ""
+                    )
+                    st.info(
+                        f"📐 Estimation Google : jusqu'à **{max_panels} panneaux** "
+                        f"installables sur ce toit{extra}."
+                    )
 
 st.subheader("\U0001F3E0 Toiture(s)")
 n_sections = st.number_input(

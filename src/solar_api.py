@@ -14,16 +14,30 @@ def fetch_roof_segments(latitude, longitude, api_key,
                          timeout=15):
     """
     Interroge Google Solar API (buildingInsights.findClosest) pour le
-    batiment le plus proche des coordonnees donnees, et renvoie la liste de
-    ses pans de toiture tries par surface decroissante :
+    batiment le plus proche des coordonnees donnees.
 
-        [{"tilt": <degres>, "azimuth": <degres>, "area": <m2>}, ...]
+    Renvoie un dict :
 
-    - tilt (pitchDegrees) : 0 = plat, 90 = vertical.
-    - azimuth (azimuthDegrees) : 0 = Nord, 90 = Est, 180 = Sud (meme
-      convention que pvlib, aucune conversion necessaire).
-    - area (areaMeters2) : surface reelle du pan (deja corrigee de
-      l'inclinaison, pas la projection au sol).
+        {
+            "segments": [{"tilt": <degres>, "azimuth": <degres>, "area": <m2>}, ...],
+            "max_panels_count": <int ou None>,
+            "panel_capacity_watts": <float ou None>,
+            "max_array_area_m2": <float ou None>,
+        }
+
+    - segments : pans de toiture tries par surface decroissante.
+      - tilt (pitchDegrees) : 0 = plat, 90 = vertical.
+      - azimuth (azimuthDegrees) : 0 = Nord, 90 = Est, 180 = Sud (meme
+        convention que pvlib, aucune conversion necessaire).
+      - area (areaMeters2) : surface reelle du pan (deja corrigee de
+        l'inclinaison, pas la projection au sol).
+    - max_panels_count : nombre maximal de panneaux que Google estime
+      pouvoir installer sur ce toit (avec son propre modele de panneau,
+      voir panel_capacity_watts pour la puissance unitaire assumee).
+    - panel_capacity_watts : puissance unitaire (Wc) du panneau de
+      reference utilise par Google pour ce calcul.
+    - max_array_area_m2 : surface totale occupee par cette configuration
+      maximale.
 
     Leve SolarApiError avec un message clair en cas d'echec.
     """
@@ -78,7 +92,8 @@ def fetch_roof_segments(latitude, longitude, api_key,
     except ValueError as exc:
         raise SolarApiError("Reponse invalide (non-JSON) de Google Solar API.") from exc
 
-    segments = data.get("solarPotential", {}).get("roofSegmentStats", [])
+    solar_potential = data.get("solarPotential", {})
+    segments = solar_potential.get("roofSegmentStats", [])
 
     if not segments:
         raise SolarApiError(
@@ -110,4 +125,9 @@ def fetch_roof_segments(latitude, longitude, api_key,
 
     parsed.sort(key=lambda s: s["area"], reverse=True)
 
-    return parsed[:max_segments]
+    return {
+        "segments": parsed[:max_segments],
+        "max_panels_count": solar_potential.get("maxArrayPanelsCount"),
+        "panel_capacity_watts": solar_potential.get("panelCapacityWatts"),
+        "max_array_area_m2": solar_potential.get("maxArrayAreaMeters2"),
+    }
