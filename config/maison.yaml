@@ -1,0 +1,41 @@
+site:
+
+  latitude: 48.815
+
+  longitude: 2.385
+
+  altitude: 45
+
+  timezone: Europe/Paris
+
+
+roof:
+
+  southwest:
+
+    tilt: 15
+
+    azimuth: 225
+
+    area: 30
+
+  northeast:
+
+    tilt: 15
+
+    azimuth: 45
+
+    area: 30
+
+
+pv:
+
+  panel_power: 640
+
+  panel_width: 1.134
+
+  panel_height: 2.382
+
+  inverter_efficiency: 0.97
+
+  performance_ratio: 0.86

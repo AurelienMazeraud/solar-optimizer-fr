@@ -1,0 +1,9 @@
+pvlib>=0.10
+pandas
+numpy
+matplotlib
+plotly
+pyyaml
+requests
+openpyxl
+streamlit>=1.30
