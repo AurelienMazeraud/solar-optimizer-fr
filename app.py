@@ -72,35 +72,55 @@ with st.expander("\U0001F50E Reperage automatique du toit (Google Solar API, opt
         "10 000 requetes gratuites par mois chez Google — largement suffisant pour "
         "un usage ponctuel."
     )
-    default_key = ""
+
+    server_key = ""
     try:
-        default_key = st.secrets.get("GOOGLE_SOLAR_API_KEY", "")
+        server_key = st.secrets.get("GOOGLE_SOLAR_API_KEY", "")
     except Exception:
-        default_key = ""
-    api_key = st.text_input(
-        "Cle API Google Solar",
-        value=default_key,
-        type="password",
-        help="Pour un usage durable/deploye, stocke plutot la cle dans "
-             "`.streamlit/secrets.toml` (GOOGLE_SOLAR_API_KEY = \"...\") — "
-             "ce fichier est deja exclu du depot Git.",
-    )
+        server_key = ""
+
+    if server_key:
+        # Cle configuree cote serveur (secrets.toml ou secrets Streamlit
+        # Community Cloud) : on l'utilise directement, sans jamais la
+        # mettre dans un widget que les visiteurs pourraient inspecter.
+        api_key = server_key
+        st.caption("✅ Clé API configurée côté serveur (non visible des visiteurs).")
+    else:
+        st.warning(
+            "Aucune clé configurée côté serveur. Le champ ci-dessous est "
+            "uniquement pour un test local : ne l'utilise jamais sur une "
+            "app publique, la valeur saisie resterait visible/inspectable "
+            "par n'importe quel visiteur de la page.",
+            icon="⚠️",
+        )
+        api_key = st.text_input(
+            "Clé API Google Solar (test local uniquement)",
+            value="",
+            type="password",
+            help="Pour un usage durable/deploye, stocke plutot la cle dans "
+                 "`.streamlit/secrets.toml` (GOOGLE_SOLAR_API_KEY = \"...\") — "
+                 "ce fichier est deja exclu du depot Git.",
+        )
+
     if st.button("Rechercher automatiquement mon toit"):
-        try:
-            segments = get_roof_segments(lat, lon, api_key)
-        except SolarApiError as exc:
-            st.error(str(exc))
+        if not api_key:
+            st.error("Renseigne une clé API (ou configure-la côté serveur) avant de chercher.")
         else:
-            n_found = len(segments)
-            st.session_state["n_sections"] = min(max(n_found, 1), 4)
-            for i, seg in enumerate(segments):
-                st.session_state[f"tilt_{i}"] = int(round(seg["tilt"]))
-                st.session_state[f"az_{i}"] = int(round(seg["azimuth"]))
-                st.session_state[f"area_{i}"] = round(seg["area"], 1)
-            st.success(
-                f"{n_found} pan(s) de toiture detecte(s) et pre-remplis ci-dessous "
-                "(inclinaison, azimut, surface reelle du pan)."
-            )
+            try:
+                segments = get_roof_segments(lat, lon, api_key)
+            except SolarApiError as exc:
+                st.error(str(exc))
+            else:
+                n_found = len(segments)
+                st.session_state["n_sections"] = min(max(n_found, 1), 4)
+                for i, seg in enumerate(segments):
+                    st.session_state[f"tilt_{i}"] = int(round(seg["tilt"]))
+                    st.session_state[f"az_{i}"] = int(round(seg["azimuth"]))
+                    st.session_state[f"area_{i}"] = round(seg["area"], 1)
+                st.success(
+                    f"{n_found} pan(s) de toiture detecte(s) et pre-remplis ci-dessous "
+                    "(inclinaison, azimut, surface reelle du pan)."
+                )
 
 st.subheader("\U0001F3E0 Toiture(s)")
 n_sections = st.number_input(
