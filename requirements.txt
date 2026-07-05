@@ -7,3 +7,5 @@ pyyaml
 requests
 openpyxl
 streamlit>=1.30
+folium
+streamlit-folium>=0.20

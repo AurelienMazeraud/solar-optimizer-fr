@@ -38,6 +38,13 @@ streamlit run app.py
 Cela ouvre l'application dans le navigateur, à l'adresse
 `http://localhost:8501`.
 
+### Localisation sur carte
+
+La section "📍 Localisation" propose une recherche d'adresse (géocodage
+gratuit via OpenStreetMap/Nominatim, sans clé) et une carte interactive
+(clic pour placer le point exact) — les champs latitude/longitude se
+mettent à jour automatiquement et restent modifiables à la main.
+
 ### Repérage automatique du toit (Google Solar API, optionnel)
 
 Dans l'expander "🔎 Repérage automatique du toit", coller une clé Google

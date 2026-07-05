@@ -1,4 +1,6 @@
 import streamlit as st
+import folium
+from streamlit_folium import st_folium
 import plotly.graph_objects as go
 
 from src.config import load_config
@@ -8,6 +10,7 @@ from src.house import House
 from src.energy import EnergyBalance, Battery
 from src.finance import Investment
 from src.solar_api import fetch_roof_segments, SolarApiError
+from src.geocode import geocode_address, GeocodeError
 
 
 st.set_page_config(
@@ -44,26 +47,66 @@ st.caption(
 )
 
 # ------------------------------------------------------------------
-# Localisation et nombre de pans de toiture : en dehors du formulaire
-# pour que la recherche automatique du toit et la mise a jour du nombre
-# de blocs soient immediates (les widgets dans un st.form ne
-# redeclenchent pas de calcul avant validation).
+# Localisation : carte interactive + recherche d'adresse + champs
+# precis. En dehors du formulaire pour une mise a jour immediate
+# (les widgets dans un st.form ne redeclenchent pas de calcul avant
+# validation).
 # ------------------------------------------------------------------
 st.subheader("\U0001F4CD Localisation")
+
+default_lat = float(cfg["site"]["latitude"]) if cfg else 48.815
+default_lon = float(cfg["site"]["longitude"]) if cfg else 2.385
+
+current_lat = st.session_state.get("lat", default_lat)
+current_lon = st.session_state.get("lon", default_lon)
+
+st.caption(
+    "Cherche une adresse ou clique directement sur la carte pour placer le "
+    "point — les champs latitude/longitude se mettent a jour automatiquement "
+    "(et restent modifiables a la main pour affiner)."
+)
+
+address_col, button_col = st.columns([4, 1])
+address = address_col.text_input(
+    "Rechercher une adresse", placeholder="ex : 12 rue de la Paix, Paris",
+    label_visibility="collapsed",
+)
+if button_col.button("Rechercher", use_container_width=True):
+    try:
+        found_lat, found_lon = geocode_address(address)
+    except GeocodeError as exc:
+        st.warning(str(exc))
+    else:
+        st.session_state["lat"] = found_lat
+        st.session_state["lon"] = found_lon
+        current_lat, current_lon = found_lat, found_lon
+        st.success(f"Adresse trouvee : {found_lat:.4f}, {found_lon:.4f}")
+
+location_map = folium.Map(location=[current_lat, current_lon], zoom_start=18)
+folium.Marker([current_lat, current_lon], tooltip="Position actuelle").add_to(location_map)
+map_state = st_folium(location_map, height=350, width=None, key="location_map")
+
+clicked = map_state.get("last_clicked") if map_state else None
+if clicked:
+    click_point = (round(clicked["lat"], 6), round(clicked["lng"], 6))
+    if st.session_state.get("_last_map_click") != click_point:
+        st.session_state["_last_map_click"] = click_point
+        st.session_state["lat"], st.session_state["lon"] = click_point
+        current_lat, current_lon = click_point
+
 c1, c2, c3 = st.columns(3)
 lat = c1.number_input(
     "Latitude", min_value=-90.0, max_value=90.0,
-    value=float(cfg["site"]["latitude"]) if cfg else 48.815, format="%.4f",
+    value=current_lat, format="%.4f", key="lat",
 )
 lon = c2.number_input(
     "Longitude", min_value=-180.0, max_value=180.0,
-    value=float(cfg["site"]["longitude"]) if cfg else 2.385, format="%.4f",
+    value=current_lon, format="%.4f", key="lon",
 )
 altitude = c3.number_input(
     "Altitude (m)", min_value=0.0, max_value=4000.0,
     value=float(cfg["site"]["altitude"]) if cfg else 45.0,
 )
-st.caption("Coordonnees du site : via une carte (clic droit -> coordonnees GPS).")
 
 with st.expander("\U0001F50E Reperage automatique du toit (Google Solar API, optionnel)"):
     st.caption(
