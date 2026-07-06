@@ -21,8 +21,10 @@ st.set_page_config(
     layout="wide",
 )
 
-MAX_GRID_COLS = 10
-MAX_GRID_ROWS = 12
+SEGMENT_COLORS = [
+    "#e6194b", "#3cb44b", "#4363d8", "#f58231",
+    "#911eb4", "#46f0f0", "#f032e6", "#bcf60c",
+]
 
 
 @st.cache_data(show_spinner="Recuperation des donnees meteo (PVGIS)...", ttl=60 * 60 * 24)
@@ -97,10 +99,11 @@ st.caption(
 with st.expander("ℹ️ Comment fonctionne ce simulateur ?"):
     st.markdown(
         "Cinq étapes : **1)** situer sa maison sur la carte, **2)** choisir un "
-        "modèle de panneau, **3)** placer les panneaux sur chaque pan de toit, "
-        "**4)** décrire sa consommation et son financement, **5)** lire les "
-        "résultats (énergie et argent). Chaque section a son propre encadré "
-        "d'explication — pas besoin de connaissances techniques en amont."
+        "modèle de panneau, **3)** répartir les panneaux sur chaque pan de "
+        "toit, **4)** décrire sa consommation et son financement, **5)** lire "
+        "les résultats (énergie et argent). Chaque section a son propre "
+        "encadré d'explication — pas besoin de connaissances techniques en "
+        "amont."
     )
 
 # ------------------------------------------------------------------
@@ -133,10 +136,9 @@ st.caption(
     "sur la carte pour placer le point sur ta maison — les champs "
     "latitude/longitude se mettent à jour automatiquement, et **dès qu'une "
     "position est choisie, la détection du toit se lance toute seule** "
-    "(section ci-dessous) si une clé API est configurée. Remarque : un vrai "
-    "glisser-déposer de la punaise n'est pas fiable dans les cartes "
-    "interactives utilisées ici — cliquer directement au bon endroit fait "
-    "la même chose en un seul geste."
+    "(section ci-dessous) si une clé API est configurée. Bascule sur la vue "
+    "satellite (icône en haut à droite de la carte) pour vérifier que le "
+    "toit détecté correspond bien à ta maison."
 )
 
 address = st.text_input(
@@ -167,14 +169,52 @@ if candidates:
             st.session_state["lat"], st.session_state["lon"] = selected_point
             current_lat, current_lon = selected_point
 
-location_map = folium.Map(location=[current_lat, current_lon], zoom_start=19)
+location_map = folium.Map(location=[current_lat, current_lon], zoom_start=19, tiles=None)
+folium.TileLayer(
+    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attr="Esri, Maxar, Earthstar Geographics",
+    name="Vue satellite",
+    overlay=False, control=True, show=True,
+).add_to(location_map)
+folium.TileLayer(
+    tiles="OpenStreetMap", name="Plan", overlay=False, control=True, show=False,
+).add_to(location_map)
+
 folium.CircleMarker(
     location=[current_lat, current_lon],
     radius=9, color="#d62728", weight=2,
     fill=True, fill_color="#d62728", fill_opacity=0.85,
     tooltip="Position actuelle — clique ailleurs pour la déplacer",
 ).add_to(location_map)
-map_state = st_folium(location_map, height=350, width=None, key="location_map")
+
+roof_overlay = st.session_state.get("_roof_overlay")
+if roof_overlay:
+    building_bbox = roof_overlay.get("building_bbox")
+    if building_bbox:
+        folium.Rectangle(
+            bounds=[building_bbox["sw"], building_bbox["ne"]],
+            color="#888888", weight=1, fill=False, dash_array="4",
+            tooltip="Bâtiment détecté par Google Solar API",
+        ).add_to(location_map)
+    for i, seg in enumerate(roof_overlay.get("segments", [])):
+        seg_bbox = seg.get("bbox")
+        if not seg_bbox:
+            continue
+        color = SEGMENT_COLORS[i % len(SEGMENT_COLORS)]
+        folium.Rectangle(
+            bounds=[seg_bbox["sw"], seg_bbox["ne"]],
+            color=color, weight=2, fill=True, fill_color=color, fill_opacity=0.3,
+            tooltip=(
+                f"Pan {i + 1} — inclinaison {seg['tilt']:.0f}°, "
+                f"azimut {seg['azimuth']:.0f}°, surface {seg['area']:.0f} m²"
+            ),
+        ).add_to(location_map)
+
+folium.LayerControl(collapsed=True).add_to(location_map)
+map_state = st_folium(
+    location_map, height=400, width=None, key="location_map",
+    returned_objects=["last_clicked"],
+)
 
 clicked = map_state.get("last_clicked") if map_state else None
 if clicked:
@@ -182,7 +222,11 @@ if clicked:
     if st.session_state.get("_last_map_click") != click_point:
         st.session_state["_last_map_click"] = click_point
         st.session_state["lat"], st.session_state["lon"] = click_point
-        current_lat, current_lon = click_point
+        # Le marqueur affiché ci-dessus a été dessiné AVANT la lecture de ce
+        # clic (donc encore à l'ancienne position) : on force un rerun
+        # immédiat pour que la carte se remette à jour tout de suite, plutôt
+        # que d'attendre une prochaine interaction de l'utilisateur.
+        st.rerun()
 
 c1, c2, c3 = st.columns(3)
 lat = c1.number_input(
@@ -207,8 +251,19 @@ with st.expander("\U0001F50E Repérage automatique du toit (Google Solar API, op
     st.caption(
         "Dès qu'une position est choisie ci-dessus (adresse ou clic sur la "
         "carte), l'inclinaison, l'azimut et la surface de chaque pan de "
-        "toiture sont récupérés automatiquement. 10 000 requêtes gratuites "
-        "par mois chez Google — largement suffisant pour un usage ponctuel."
+        "toiture sont récupérés automatiquement et affichés directement sur "
+        "la carte (rectangles colorés). 10 000 requêtes gratuites par mois "
+        "chez Google — largement suffisant pour un usage ponctuel."
+    )
+    st.info(
+        "⚠️ L'algorithme de Google (basé sur imagerie/LIDAR) peut se tromper, "
+        "surtout sur les toits plats, complexes ou de petite taille (ex : une "
+        "inclinaison affichée à 27° alors que le toit est plat). Compare "
+        "toujours les rectangles colorés à la vue satellite ci-dessus, et "
+        "corrige librement les valeurs dans la section « Toiture(s) » "
+        "ci-dessous si elles ne correspondent pas à la réalité — le calcul "
+        "utilise les valeurs du formulaire, pas directement celles de Google.",
+        icon="ℹ️",
     )
 
     server_key = ""
@@ -246,17 +301,14 @@ with st.expander("\U0001F50E Repérage automatique du toit (Google Solar API, op
         force_retry or st.session_state.get("_last_solar_lookup") != lookup_signature
     )
 
-    if not api_key:
-        st.caption(
-            "Renseigne une clé (ci-dessus, ou dans secrets.toml) pour activer "
-            "la détection automatique."
-        )
-    elif should_lookup:
+    if should_lookup:
         st.session_state["_last_solar_lookup"] = lookup_signature
         try:
             result = get_roof_segments(lat, lon, api_key)
         except SolarApiError as exc:
-            st.error(str(exc))
+            st.session_state["_roof_overlay"] = None
+            st.session_state["_roof_fetch_error"] = str(exc)
+            st.session_state["_roof_fetch_summary"] = None
         else:
             segments = result["segments"]
             n_found = len(segments)
@@ -271,36 +323,59 @@ with st.expander("\U0001F50E Repérage automatique du toit (Google Solar API, op
                 st.session_state[f"width_{i}"] = round(side, 1)
                 st.session_state[f"height_{i}"] = round(side, 1)
 
-            st.success(
-                f"{n_found} pan(s) de toiture detecte(s) et pre-remplis "
-                "ci-dessous (inclinaison, azimut ; largeur/hauteur approximees "
-                "en carré à partir de la surface — à ajuster si besoin)."
-            )
-
             max_panels = result.get("max_panels_count")
             panel_w = result.get("panel_capacity_watts")
             panel_h_m = result.get("panel_height_m")
             panel_w_m = result.get("panel_width_m")
-            if max_panels:
-                ref_bits = []
-                if panel_w:
-                    ref_bits.append(f"{panel_w:.0f} Wc")
-                if panel_h_m and panel_w_m:
-                    ref_bits.append(f"{panel_h_m:.2f} × {panel_w_m:.2f} m")
-                ref = f" (panneau de référence Google : {', '.join(ref_bits)})" if ref_bits else ""
-                st.info(
-                    f"📐 Estimation Google : jusqu'à **{max_panels} panneaux** "
-                    f"installables sur ce toit{ref}. Si tes panneaux ont des "
-                    "dimensions différentes (voir section ci-dessous), le nombre "
-                    "réel peut varier — le calcul de production utilise bien tes "
-                    "propres dimensions, pas celles de Google."
-                )
+            ref_bits = []
+            if panel_w:
+                ref_bits.append(f"{panel_w:.0f} Wc")
+            if panel_h_m and panel_w_m:
+                ref_bits.append(f"{panel_h_m:.2f} × {panel_w_m:.2f} m")
+
+            st.session_state["_roof_overlay"] = {
+                "segments": segments,
+                "building_bbox": result.get("building_bbox"),
+            }
+            st.session_state["_roof_fetch_error"] = None
+            st.session_state["_roof_fetch_summary"] = {
+                "n_found": n_found, "max_panels": max_panels, "ref_bits": ref_bits,
+            }
+        # Rejoue immediatement le script : la carte (dessinee plus haut) et
+        # le reste de la page s'affichent alors avec les donnees fraiches,
+        # sans attendre une nouvelle interaction de l'utilisateur.
+        st.rerun()
+
+    if st.session_state.get("_roof_fetch_error"):
+        st.error(st.session_state["_roof_fetch_error"])
+    elif st.session_state.get("_roof_fetch_summary"):
+        summary = st.session_state["_roof_fetch_summary"]
+        st.success(
+            f"{summary['n_found']} pan(s) de toiture detecte(s), affiches sur la "
+            "carte ci-dessus et pre-remplis ci-dessous (inclinaison, azimut ; "
+            "largeur/hauteur approximees en carré à partir de la surface — à "
+            "ajuster si besoin)."
+        )
+        if summary["max_panels"]:
+            ref = f" (panneau de référence Google : {', '.join(summary['ref_bits'])})" if summary["ref_bits"] else ""
+            st.info(
+                f"📐 Estimation Google : jusqu'à **{summary['max_panels']} panneaux** "
+                f"installables sur ce toit{ref}. Si tes panneaux ont des "
+                "dimensions différentes (voir section ci-dessous), le nombre "
+                "réel peut varier — le calcul de production utilise bien tes "
+                "propres dimensions, pas celles de Google."
+            )
+    elif not api_key:
+        st.caption(
+            "Renseigne une clé (ci-dessus, ou dans secrets.toml) pour activer "
+            "la détection automatique."
+        )
     else:
         st.caption("Position déjà analysée pour cette clé — clique sur 🔄 pour relancer.")
 
 # ------------------------------------------------------------------
-# Modules PV : la taille du panneau doit etre connue AVANT de dessiner
-# la grille de placement sur chaque pan.
+# Modules PV : la taille du panneau doit etre connue AVANT de calculer
+# combien de panneaux tiennent sur chaque pan.
 # ------------------------------------------------------------------
 st.subheader("\U0001F527 Modules photovoltaïques")
 
@@ -343,11 +418,11 @@ inverter_efficiency = c2.slider(
 panel_power_kw = panel_power / 1000
 
 # ------------------------------------------------------------------
-# Toiture(s) : geometrie de chaque pan + grille cliquable de panneaux.
-# En dehors du st.form pour que les clics sur la grille reagissent
-# immediatement.
+# Toiture(s) : geometrie de chaque pan + repartition des panneaux via
+# un simple curseur par pan. En dehors du st.form pour que les
+# ajustements reagissent immediatement.
 # ------------------------------------------------------------------
-st.subheader("\U0001F3E0 Toiture(s) & placement des panneaux")
+st.subheader("\U0001F3E0 Toiture(s) & répartition des panneaux")
 
 with st.expander("ℹ️ Pourquoi ces informations ?"):
     st.markdown(
@@ -359,9 +434,8 @@ with st.expander("ℹ️ Pourquoi ces informations ?"):
         "dessus, en fonction de leur taille et de leur orientation "
         "(portrait ou paysage). Ensuite, choisis toi-même **combien de "
         "panneaux tu veux installer** et **comment les répartir** entre les "
-        "pans, en cliquant directement sur la grille ci-dessous — chaque "
-        "case cliquée représente un panneau réellement posé et compté dans "
-        "la simulation."
+        "pans avec un curseur par pan — le nombre affiché est ce qui est "
+        "réellement compté dans la simulation."
     )
 
 n_sections = st.number_input(
@@ -408,27 +482,20 @@ for i in range(int(n_sections)):
     cols_count, rows_count = panel_grid_dims(
         width_m, height_m, panel_width, panel_height, orientation
     )
-    capped_cols = min(cols_count, MAX_GRID_COLS)
-    capped_rows = min(rows_count, MAX_GRID_ROWS)
+    max_slots = cols_count * rows_count
     section_geoms.append({
-        "tilt": tilt, "azimuth": azimuth, "width": width_m, "height": height_m,
-        "cols": cols_count, "rows": rows_count,
-        "display_cols": capped_cols, "display_rows": capped_rows,
+        "tilt": tilt, "azimuth": azimuth, "max_slots": max_slots,
     })
-    if cols_count == 0 or rows_count == 0:
+    if max_slots == 0:
         st.warning(
             "Aucun panneau ne tient sur ce pan avec ces dimensions — "
             "augmente la largeur/hauteur ou réduis la taille du panneau."
         )
-    elif cols_count > MAX_GRID_COLS or rows_count > MAX_GRID_ROWS:
-        st.caption(
-            f"Pan capable d'accueillir {cols_count * rows_count} panneaux "
-            f"({cols_count}×{rows_count}) — affichage limité à "
-            f"{capped_cols}×{capped_rows} cases pour rester lisible."
-        )
+    else:
+        st.caption(f"Jusqu'à {max_slots} panneaux possibles sur ce pan ({cols_count}×{rows_count}).")
     st.divider()
 
-total_slots = [g["display_cols"] * g["display_rows"] for g in section_geoms]
+total_slots = [g["max_slots"] for g in section_geoms]
 
 st.markdown("**Combien de panneaux veux-tu installer au total ?**")
 dc1, dc2 = st.columns([2, 1])
@@ -440,51 +507,27 @@ desired_total_panels = dc1.number_input(
 )
 if dc2.button("Répartir automatiquement sur les pans", use_container_width=True):
     alloc = auto_distribute(desired_total_panels, total_slots)
-    for i, geom in enumerate(section_geoms):
-        n_to_fill = alloc[i]
-        idx = 0
-        for r in range(geom["display_rows"]):
-            for c in range(geom["display_cols"]):
-                key = f"cell_{i}_{r}_{c}"
-                st.session_state[key] = idx < n_to_fill
-                idx += 1
+    for i, n in enumerate(alloc):
+        st.session_state[f"panels_{i}"] = n
 
-st.markdown("**Clique sur les cases pour poser ou retirer un panneau, pan par pan :**")
+st.markdown("**Ajuste le nombre de panneaux pan par pan :**")
 
 roof_sections = []
 for i, geom in enumerate(section_geoms):
-    st.markdown(f"**Pan {i + 1} — placement** ({geom['cols']}×{geom['rows']} places possibles)")
-    if geom["display_cols"] and geom["display_rows"]:
-        bcol1, bcol2, _ = st.columns([1, 1, 3])
-        if bcol1.button("Tout remplir", key=f"fill_{i}", use_container_width=True):
-            for r in range(geom["display_rows"]):
-                for c in range(geom["display_cols"]):
-                    st.session_state[f"cell_{i}_{r}_{c}"] = True
-        if bcol2.button("Tout vider", key=f"clear_{i}", use_container_width=True):
-            for r in range(geom["display_rows"]):
-                for c in range(geom["display_cols"]):
-                    st.session_state[f"cell_{i}_{r}_{c}"] = False
-
-        for r in range(geom["display_rows"]):
-            row_cols = st.columns(geom["display_cols"])
-            for c in range(geom["display_cols"]):
-                key = f"cell_{i}_{r}_{c}"
-                active = st.session_state.get(key, False)
-                label = "🟦" if active else "⬜"
-                if row_cols[c].button(label, key=f"btn_{key}", use_container_width=True):
-                    st.session_state[key] = not active
-
-    n_selected = sum(
-        1
-        for r in range(geom["display_rows"])
-        for c in range(geom["display_cols"])
-        if st.session_state.get(f"cell_{i}_{r}_{c}", False)
-    )
-    st.caption(f"{n_selected} panneau(x) sélectionné(s) sur ce pan.")
+    if geom["max_slots"] == 0:
+        n_panels = 0
+        st.caption(f"Pan {i + 1} : 0 panneau (aucune place disponible).")
+    else:
+        default_n = st.session_state.get(f"panels_{i}", geom["max_slots"])
+        n_panels = st.slider(
+            f"Pan {i + 1} — nombre de panneaux",
+            min_value=0, max_value=geom["max_slots"],
+            value=min(default_n, geom["max_slots"]),
+            key=f"panels_{i}",
+        )
     roof_sections.append({
-        "tilt": geom["tilt"], "azimuth": geom["azimuth"], "n_panels": n_selected,
+        "tilt": geom["tilt"], "azimuth": geom["azimuth"], "n_panels": n_panels,
     })
-    st.divider()
 
 total_panels_selected = sum(s["n_panels"] for s in roof_sections)
 total_installed_kw = total_panels_selected * panel_power_kw
@@ -650,8 +693,8 @@ if submitted:
 
     if total_panels_selected == 0:
         st.error(
-            "Aucun panneau sélectionné sur la toiture — clique sur la grille "
-            "ci-dessus (ou sur « Répartir automatiquement ») avant de calculer."
+            "Aucun panneau sélectionné sur la toiture — utilise les curseurs "
+            "ci-dessus (ou « Répartir automatiquement ») avant de calculer."
         )
         st.stop()
 

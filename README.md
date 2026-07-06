@@ -25,8 +25,8 @@ python main.py
 ## Interface web (Streamlit)
 
 `app.py` propose un parcours pédagogique (chaque section a son encadré
-"ℹ️ Pourquoi ces informations ?") : localisation, modules PV, placement des
-panneaux sur la toiture, consommation du foyer, batterie optionnelle,
+"ℹ️ Pourquoi ces informations ?") : localisation, modules PV, répartition
+des panneaux sur la toiture, consommation du foyer, batterie optionnelle,
 financement, tarifs — puis affiche les résultats (production,
 autoconsommation, temps de retour, VAN) avec des graphiques interactifs. La
 batterie est simulée heure par heure (charge sur le surplus, décharge sur
@@ -44,38 +44,48 @@ Cela ouvre l'application dans le navigateur, à l'adresse
 
 La section "📍 Localisation" propose une recherche d'adresse (géocodage
 gratuit via OpenStreetMap/Nominatim, sans clé) et une carte interactive
-(clic pour placer le point exact) — les champs latitude/longitude se
-mettent à jour automatiquement et restent modifiables à la main. Un vrai
-glisser-déposer (drag-and-drop) de la punaise n'est pas fiable avec les
-cartes interactives utilisées ici (streamlit-folium ne capture pas les
-événements de fin de glissement de façon robuste) : cliquer directement au
-bon endroit fait la même chose en un seul geste.
+(clic pour placer le point exact, bascule vue satellite/plan via l'icône
+en haut à droite) — les champs latitude/longitude se mettent à jour
+automatiquement et restent modifiables à la main. Le marqueur se
+repositionne immédiatement après un clic (un rerun forcé évite le
+décalage d'un cycle qui donnait l'impression que la carte mettait du
+temps à réagir). Un vrai glisser-déposer (drag-and-drop) de la punaise
+n'est pas fiable avec les cartes interactives utilisées ici
+(streamlit-folium ne capture pas les événements de fin de glissement de
+façon robuste) : cliquer directement au bon endroit fait la même chose en
+un seul geste.
 
 ### Repérage automatique du toit (Google Solar API, optionnel)
 
 Dans l'expander "🔎 Repérage automatique du toit", coller une clé Google
 Solar API déclenche **automatiquement** (dès qu'une position est choisie,
 sans bouton à cliquer) la récupération de l'inclinaison, l'azimut et la
-surface des pans de toiture détectés (10 000 requêtes gratuites/mois). Un
-bouton "🔄 Relancer la détection" reste disponible pour forcer une nouvelle
-tentative (ex : après avoir collé la clé après coup). Google ne fournissant
-que la surface de chaque pan (pas sa forme exacte), la largeur/hauteur sont
-approximées par un carré équivalent — à ajuster manuellement si les
-dimensions réelles sont connues.
+surface des pans de toiture détectés (10 000 requêtes gratuites/mois). Les
+pans détectés s'affichent directement sur la carte sous forme de
+rectangles colorés avec info-bulle (inclinaison/azimut/surface), ainsi que
+le contour du bâtiment identifié par Google — à comparer visuellement à
+la vue satellite pour vérifier que le bon bâtiment/toit a été détecté.
+L'algorithme de Google (imagerie/LIDAR) peut se tromper, notamment sur les
+toits plats, complexes ou de petite taille (ex : inclinaison non nulle
+affichée sur un toit plat) : les valeurs restent éditables manuellement
+dans la section "Toiture(s)" ci-dessous, qui est ce qui alimente réellement
+le calcul. Un bouton "🔄 Relancer la détection" reste disponible pour
+forcer une nouvelle tentative (ex : après avoir collé la clé après coup).
+Google ne fournissant que la surface de chaque pan (pas sa forme exacte),
+la largeur/hauteur sont approximées par un carré équivalent — à ajuster
+manuellement si les dimensions réelles sont connues.
 
-### Placement des panneaux sur le toit
+### Répartition des panneaux sur le toit
 
-La section "🏠 Toiture(s) & placement des panneaux" permet, pour chaque
+La section "🏠 Toiture(s) & répartition des panneaux" permet, pour chaque
 pan : de saisir sa largeur/hauteur et l'orientation des panneaux
 (portrait/paysage), ce qui détermine combien de panneaux tiennent
-physiquement dessus (grille colonnes × lignes, limitée à 10×12 cases à
-l'écran pour rester lisible sur les très grands toits). Un champ "Nombre
-de panneaux souhaité (total)" + bouton "Répartir automatiquement" répartit
-ce total au prorata des places disponibles sur chaque pan ; on peut ensuite
-affiner en cliquant directement sur les cases de la grille (🟦 = panneau
-posé, ⬜ = case vide), ou utiliser "Tout remplir"/"Tout vider" par pan. Le
-nombre de panneaux réellement sélectionné (pas une estimation de surface)
-est ce qui alimente le calcul de production.
+physiquement dessus. Un champ "Nombre de panneaux souhaité (total)" +
+bouton "Répartir automatiquement" répartit ce total au prorata des places
+disponibles sur chaque pan ; on peut ensuite affiner avec un simple
+curseur par pan (0 jusqu'à la capacité maximale calculée). Le nombre de
+panneaux réellement réglé sur chaque curseur (pas une estimation de
+surface) est ce qui alimente le calcul de production.
 
 Pour ne jamais committer la clé par erreur :
 
@@ -122,8 +132,7 @@ Quelques options, du plus simple au plus autonome :
 - Les données météo viennent de l'API PVGIS (Commission européenne) : une
   connexion internet est nécessaire au premier calcul pour chaque
   localisation (les résultats sont ensuite mis en cache).
-- La grille de placement des panneaux affiche au maximum 10×12 cases par
-  pan pour rester réactive : au-delà, le nombre réel de places possibles
-  est indiqué en texte mais l'affichage est tronqué (le calcul de
-  production utilise bien le nombre de panneaux réellement sélectionnés
-  dans la grille affichée).
+- Les valeurs (inclinaison, azimut, surface) fournies par Google Solar API
+  sont une estimation automatique et peuvent contenir des erreurs,
+  notamment sur les toits plats ou complexes — toujours vérifier
+  visuellement via la vue satellite et corriger manuellement si besoin.

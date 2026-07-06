@@ -8,6 +8,30 @@ class SolarApiError(Exception):
     batiment trouve, quota depasse, probleme reseau...)."""
 
 
+def _latlng(obj):
+    """Convertit un objet LatLng de l'API ({"latitude":.., "longitude":..})
+    en tuple (lat, lon), ou None si absent/incomplet."""
+    if not obj:
+        return None
+    lat = obj.get("latitude")
+    lon = obj.get("longitude")
+    if lat is None or lon is None:
+        return None
+    return (lat, lon)
+
+
+def _bbox(obj):
+    """Convertit un objet LatLngBox ({"sw": LatLng, "ne": LatLng}) en
+    {"sw": (lat, lon), "ne": (lat, lon)}, ou None si absent/incomplet."""
+    if not obj:
+        return None
+    sw = _latlng(obj.get("sw"))
+    ne = _latlng(obj.get("ne"))
+    if sw is None or ne is None:
+        return None
+    return {"sw": sw, "ne": ne}
+
+
 def fetch_roof_segments(latitude, longitude, api_key,
                          required_quality="MEDIUM",
                          max_segments=4,
@@ -19,20 +43,34 @@ def fetch_roof_segments(latitude, longitude, api_key,
     Renvoie un dict :
 
         {
-            "segments": [{"tilt": <degres>, "azimuth": <degres>, "area": <m2>}, ...],
+            "segments": [
+                {
+                    "tilt": <degres>, "azimuth": <degres>, "area": <m2>,
+                    "center": (lat, lon) ou None,
+                    "bbox": {"sw": (lat, lon), "ne": (lat, lon)} ou None,
+                },
+                ...
+            ],
             "max_panels_count": <int ou None>,
             "panel_capacity_watts": <float ou None>,
             "panel_height_m": <float ou None>,
             "panel_width_m": <float ou None>,
             "max_array_area_m2": <float ou None>,
+            "building_center": (lat, lon) ou None,
+            "building_bbox": {"sw": (lat, lon), "ne": (lat, lon)} ou None,
         }
 
     - segments : pans de toiture tries par surface decroissante.
-      - tilt (pitchDegrees) : 0 = plat, 90 = vertical.
+      - tilt (pitchDegrees) : 0 = plat, 90 = vertical. L'algorithme de
+        segmentation de Google (base sur l'imagerie/LIDAR) peut se tromper
+        legerement, notamment sur des toits plats, complexes ou de petite
+        taille : ces valeurs restent a corriger manuellement si elles ne
+        correspondent pas a ce qu'on observe sur la vue satellite.
       - azimuth (azimuthDegrees) : 0 = Nord, 90 = Est, 180 = Sud (meme
         convention que pvlib, aucune conversion necessaire).
       - area (areaMeters2) : surface reelle du pan (deja corrigee de
         l'inclinaison, pas la projection au sol).
+      - center / bbox : position du pan, pour affichage sur une carte.
     - max_panels_count : nombre maximal de panneaux que Google estime
       pouvoir installer sur ce toit, avec SON propre panneau de reference
       (voir panel_capacity_watts / panel_height_m / panel_width_m) — pas
@@ -44,6 +82,10 @@ def fetch_roof_segments(latitude, longitude, api_key,
       reference, en orientation portrait.
     - max_array_area_m2 : surface totale occupee par cette configuration
       maximale.
+    - building_center / building_bbox : position et emprise du batiment
+      detecte, pour verifier visuellement qu'il s'agit bien du bon
+      batiment (Google cherche le batiment le plus proche du point donne,
+      dans un rayon d'environ 50 m).
 
     Leve SolarApiError avec un message clair en cas d'echec.
     """
@@ -121,6 +163,8 @@ def fetch_roof_segments(latitude, longitude, api_key,
             "tilt": max(0.0, min(90.0, tilt)),
             "azimuth": max(0.0, min(360.0, azimuth)),
             "area": area,
+            "center": _latlng(seg.get("center")),
+            "bbox": _bbox(seg.get("boundingBox")),
         })
 
     if not parsed:
@@ -138,4 +182,6 @@ def fetch_roof_segments(latitude, longitude, api_key,
         "panel_height_m": solar_potential.get("panelHeightMeters"),
         "panel_width_m": solar_potential.get("panelWidthMeters"),
         "max_array_area_m2": solar_potential.get("maxArrayAreaMeters2"),
+        "building_center": _latlng(data.get("center")),
+        "building_bbox": _bbox(data.get("boundingBox")),
     }
