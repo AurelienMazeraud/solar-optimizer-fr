@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
+
+# Donnees personnelles collectees via le formulaire de contact
+# (Ivry Soleil Partage) : ne doivent jamais etre commitees dans le depot.
+data/

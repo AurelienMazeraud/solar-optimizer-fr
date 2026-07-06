@@ -98,6 +98,37 @@ puis remplacer la valeur par la vraie clé dans ce fichier local
 Community Cloud, la clé se configure plutôt dans les "Secrets" de l'app,
 depuis le tableau de bord — jamais dans le dépôt.
 
+### Formulaire de contact (Ivry Soleil Partagé)
+
+En bas de page, un formulaire facultatif permet de laisser ses coordonnées
+(prénom, nom, email, téléphone, adresse — pré-remplie depuis la recherche
+d'adresse faite en haut de page) pour être recontacté·e au sujet du projet
+de communauté d'autoconsommation collective. Les mentions RGPD (finalité,
+base légale, durée de conservation, droits, contact CNIL) sont détaillées
+dans l'expander juste au-dessus du formulaire.
+
+Fonctionnement technique :
+
+- Les données sont stockées **uniquement en local**, dans une base SQLite
+  (`data/contacts.db`, créée automatiquement au premier envoi). Aucun appel
+  réseau, aucun service tiers.
+- Le fichier `data/contacts.db` est exclu du dépôt par `.gitignore` — des
+  données personnelles ne doivent jamais être commitées dans Git.
+- Une case de consentement est **obligatoire** pour l'enregistrement (base
+  légale du traitement) ; une seconde case, **facultative et décochée par
+  défaut**, autorise en plus le partage avec des partenaires du projet —
+  sans elle, les coordonnées ne doivent jamais être transmises à un tiers.
+- **Important pour le déploiement** : sur un hébergement à disque éphémère
+  (typiquement Streamlit Community Cloud), `data/contacts.db` ne survit pas
+  à un redémarrage/redéploiement de l'app. Pour une conservation fiable des
+  contacts dans la durée, préférer un auto-hébergement (NAS Synology, VPS...)
+  où le disque persiste réellement entre les redémarrages.
+- Avant toute collecte réelle de données personnelles, faire relire les
+  mentions RGPD par un professionnel du droit (durée de conservation, nom
+  légal exact du responsable de traitement, éventuelles obligations
+  déclaratives selon l'ampleur de la collecte) — le texte fourni est un
+  point de départ, pas un avis juridique.
+
 ### Intégrer l'app dans une page internet
 
 Quelques options, du plus simple au plus autonome :
@@ -136,3 +167,6 @@ Quelques options, du plus simple au plus autonome :
   sont une estimation automatique et peuvent contenir des erreurs,
   notamment sur les toits plats ou complexes — toujours vérifier
   visuellement via la vue satellite et corriger manuellement si besoin.
+- La base de contacts locale (`data/contacts.db`) n'est pas fiable sur un
+  hébergement à disque éphémère (voir "Formulaire de contact" ci-dessus) :
+  prévoir un auto-hébergement pour une conservation réelle dans la durée.

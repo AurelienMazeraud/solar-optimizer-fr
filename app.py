@@ -1,4 +1,5 @@
 import math
+import re
 
 import streamlit as st
 import folium
@@ -13,6 +14,7 @@ from src.energy import EnergyBalance, Battery
 from src.finance import Investment
 from src.solar_api import fetch_roof_segments, SolarApiError
 from src.geocode import geocode_address, search_addresses, GeocodeError
+from src.contacts import save_contact
 
 
 st.set_page_config(
@@ -25,6 +27,8 @@ SEGMENT_COLORS = [
     "#e6194b", "#3cb44b", "#4363d8", "#f58231",
     "#911eb4", "#46f0f0", "#f032e6", "#bcf60c",
 ]
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 @st.cache_data(show_spinner="Recuperation des donnees meteo (PVGIS)...", ttl=60 * 60 * 24)
@@ -164,6 +168,7 @@ if candidates:
     if choice:
         selected = candidates[labels.index(choice)]
         selected_point = (selected["lat"], selected["lon"])
+        st.session_state["_selected_address_label"] = selected["label"]
         if st.session_state.get("_last_address_applied") != selected_point:
             st.session_state["_last_address_applied"] = selected_point
             st.session_state["lat"], st.session_state["lon"] = selected_point
@@ -849,3 +854,100 @@ if submitted:
 
 else:
     st.info("Renseigne tes informations ci-dessus puis clique sur *Calculer*.")
+
+# ------------------------------------------------------------------
+# Rejoindre Ivry Soleil Partagé : recueil de coordonnées volontaire,
+# stockees UNIQUEMENT en local (base sqlite), jamais transmises a un
+# tiers sans autorisation specifique et distincte de la personne.
+# ------------------------------------------------------------------
+st.divider()
+st.subheader("\U0001F91D Rejoindre Ivry Soleil Partagé")
+st.caption(
+    "Envie d'être tenu·e au courant du projet de communauté d'autoconsommation "
+    "collective, ou d'y participer ? Laisse tes coordonnées ci-dessous — "
+    "entièrement facultatif, indépendant de la simulation ci-dessus."
+)
+
+with st.expander("ℹ️ Mentions RGPD — à lire avant de transmettre tes données"):
+    st.markdown(
+        "**Qui recueille ces données ?** L'association *Ivry Soleil Partagé* "
+        "(en cours de constitution), responsable du traitement.\n\n"
+        "**Pourquoi ?** Uniquement pour te recontacter dans le cadre de ce "
+        "projet d'autoconsommation collective — aucune prospection "
+        "commerciale, aucune revente de données.\n\n"
+        "**Base légale :** ton consentement explicite (article 6.1.a du "
+        "RGPD), donné en cochant la case dédiée ci-dessous.\n\n"
+        "**Où sont conservées ces données ?** Uniquement dans une base de "
+        "données locale à cette application — pas de service tiers, pas de "
+        "cloud commercial.\n\n"
+        "**Transmission à des partenaires :** tes coordonnées ne sont "
+        "**jamais transmises à des partenaires** (installateurs, "
+        "opérateurs, collectivités...) sans une autorisation *spécifique* "
+        "et distincte de ta part (seconde case, décochée par défaut).\n\n"
+        "**Durée de conservation :** 3 ans à compter du dernier contact, ou "
+        "jusqu'à une demande de suppression de ta part.\n\n"
+        "**Tes droits :** accès, rectification, effacement, limitation et "
+        "opposition, à exercer à tout moment auprès de "
+        "contact@ivrysoleilpartage.fr *(adresse à adapter)*. Tu peux aussi "
+        "déposer une réclamation auprès de la CNIL (cnil.fr).\n\n"
+        "_Ce texte est un point de départ, pas un avis juridique : à faire "
+        "relire par un professionnel du droit avant toute collecte réelle, "
+        "notamment pour confirmer la durée de conservation et le nom légal "
+        "du responsable de traitement._"
+    )
+
+default_contact_address = st.session_state.get("_selected_address_label", "")
+
+with st.form("contact_form", clear_on_submit=True):
+    cf1, cf2 = st.columns(2)
+    contact_first_name = cf1.text_input("Prénom")
+    contact_last_name = cf2.text_input("Nom")
+    cf3, cf4 = st.columns(2)
+    contact_email = cf3.text_input("Email")
+    contact_phone = cf4.text_input("Téléphone")
+    contact_address = st.text_input(
+        "Adresse",
+        value=default_contact_address,
+        help="Pré-remplie depuis la recherche d'adresse ci-dessus — modifiable.",
+    )
+    storage_consent = st.checkbox(
+        "J'accepte que Ivry Soleil Partagé conserve mes coordonnées (nom, "
+        "prénom, email, téléphone, adresse) dans les conditions décrites "
+        "ci-dessus. (obligatoire pour envoyer le formulaire)"
+    )
+    partner_sharing_consent = st.checkbox(
+        "J'autorise en plus Ivry Soleil Partagé à transmettre mes "
+        "coordonnées à des partenaires du projet si cela devient "
+        "nécessaire. (facultatif, décoché par défaut — révocable à tout moment)"
+    )
+    contact_submitted = st.form_submit_button("Envoyer mes coordonnées", use_container_width=True)
+
+if contact_submitted:
+    missing = []
+    if not contact_first_name.strip():
+        missing.append("le prénom")
+    if not contact_last_name.strip():
+        missing.append("le nom")
+    if not contact_email.strip() or not EMAIL_RE.match(contact_email.strip()):
+        missing.append("un email valide")
+    if not contact_phone.strip():
+        missing.append("le téléphone")
+    if not storage_consent:
+        missing.append("la case de consentement RGPD (obligatoire)")
+
+    if missing:
+        st.error("Merci de renseigner/cocher : " + ", ".join(missing) + ".")
+    else:
+        try:
+            save_contact(
+                contact_first_name, contact_last_name, contact_email,
+                contact_phone, contact_address, lat, lon,
+                storage_consent, partner_sharing_consent,
+            )
+        except Exception as exc:
+            st.error(f"Erreur lors de l'enregistrement : {exc}")
+        else:
+            st.success(
+                "Merci ! Tes coordonnées ont été enregistrées localement. "
+                "Ivry Soleil Partagé te recontactera bientôt."
+            )
