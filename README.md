@@ -25,13 +25,33 @@ python main.py
 ## Interface web (Streamlit)
 
 `app.py` propose un parcours pédagogique (chaque section a son encadré
-"ℹ️ Pourquoi ces informations ?") : localisation, modules PV, répartition
-des panneaux sur la toiture, consommation du foyer, batterie optionnelle,
-financement, tarifs — puis affiche les résultats (production,
+"ℹ️ Pourquoi ces informations ?") : choix du profil, localisation, modules PV,
+répartition des panneaux sur la toiture, consommation du foyer, batterie
+optionnelle, financement, tarifs — puis affiche les résultats (production,
 autoconsommation, temps de retour, VAN) avec des graphiques interactifs. La
 batterie est simulée heure par heure (charge sur le surplus, décharge sur
 le manque, rendement aller-retour) et augmente mécaniquement le taux
 d'autoconsommation.
+
+### Deux profils
+
+En haut de page, un sélecteur "Quel est ton profil ?" propose deux
+parcours :
+
+- **Je simule un nouveau projet** : parcours complet (détection du toit,
+  modules PV, répartition des panneaux) qui simule la production heure par
+  heure à partir de données météo PVGIS.
+- **J'ai déjà une installation — j'entre mes données réelles** : masque les
+  sections de simulation physique (détection du toit, modules PV,
+  répartition des panneaux, batterie) et affiche à la place un bloc
+  "Vos données réelles" où l'on saisit directement la consommation
+  annuelle, la production annuelle et — si connue — l'énergie
+  injectée/revendue (sinon estimée par `max(production − consommation, 0)`).
+  Ces chiffres viennent typiquement d'une facture EDF annuelle, de l'appli
+  de monitoring de l'onduleur, ou d'un relevé Linky. Les sections
+  Investissement/financement et Tarifs restent communes aux deux profils,
+  ce qui permet d'estimer le retour sur investissement réel d'une
+  installation déjà posée.
 
 ```
 streamlit run app.py
