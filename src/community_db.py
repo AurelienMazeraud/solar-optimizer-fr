@@ -72,6 +72,20 @@ def _get_connection():
         "INSERT OR IGNORE INTO community_targets (id, production_target_kwh, consumption_target_kwh) "
         "VALUES (1, 10000, 5000)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tariff_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            acc_price_eur_kwh REAL NOT NULL DEFAULT 0.15,
+            turpe_reduced_eur_kwh REAL NOT NULL DEFAULT 0.02,
+            pmo_fee_pct REAL NOT NULL DEFAULT 0.0
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO tariff_settings (id, acc_price_eur_kwh, turpe_reduced_eur_kwh, pmo_fee_pct) "
+        "VALUES (1, 0.15, 0.02, 0.0)"
+    )
     conn.commit()
     return conn
 
@@ -250,6 +264,39 @@ def set_targets(production_target_kwh, consumption_target_kwh):
         conn.execute(
             "UPDATE community_targets SET production_target_kwh = ?, consumption_target_kwh = ? WHERE id = 1",
             (float(production_target_kwh), float(consumption_target_kwh)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_acc_tariff_settings():
+    """Renvoie (prix_brut_eur_kwh, turpe_reduit_eur_kwh, frais_pmo_ratio) pour
+    la revente en autoconsommation collective. Ces valeurs sont fixees par
+    un-e administrateur-ice (onglet Administration) -- ne sont plus
+    editables directement dans le formulaire de simulation."""
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT acc_price_eur_kwh, turpe_reduced_eur_kwh, pmo_fee_pct "
+            "FROM tariff_settings WHERE id = 1"
+        ).fetchone()
+        return (
+            float(row["acc_price_eur_kwh"]),
+            float(row["turpe_reduced_eur_kwh"]),
+            float(row["pmo_fee_pct"]),
+        )
+    finally:
+        conn.close()
+
+
+def set_acc_tariff_settings(acc_price_eur_kwh, turpe_reduced_eur_kwh, pmo_fee_pct):
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE tariff_settings SET acc_price_eur_kwh = ?, turpe_reduced_eur_kwh = ?, "
+            "pmo_fee_pct = ? WHERE id = 1",
+            (float(acc_price_eur_kwh), float(turpe_reduced_eur_kwh), float(pmo_fee_pct)),
         )
         conn.commit()
     finally:

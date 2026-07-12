@@ -19,7 +19,8 @@ from src.contacts import save_contact
 from src.community_db import (
     submit_producer, submit_consumer, list_producers, list_consumers,
     set_producer_status, set_consumer_status, get_approved_totals,
-    get_targets, set_targets, STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED,
+    get_targets, set_targets, get_acc_tariff_settings, set_acc_tariff_settings,
+    STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED,
 )
 from src.invoice_extraction import extract_invoice_data, InvoiceExtractionError
 
@@ -249,9 +250,14 @@ with tab_producteur:
             "nouveau projet."
         )
 
-    default_lat = float(cfg["site"]["latitude"]) if cfg else 48.815
-    default_lon = float(cfg["site"]["longitude"]) if cfg else 2.385
+    # Position par defaut avant tout choix explicite de l'utilisateur-ice :
+    # metro Mairie d'Ivry (Ivry-sur-Seine), plutot qu'une adresse personnelle
+    # pre-configuree -- aucune detection de toit ne doit se lancer tant que
+    # l'utilisateur-ice n'a pas lui-meme choisi une adresse ou clique sur la carte.
+    default_lat = 48.8111
+    default_lon = 2.3834
     default_altitude = float(cfg["site"]["altitude"]) if cfg else 45.0
+    position_chosen = "lat" in st.session_state and "lon" in st.session_state
 
     current_lat = st.session_state.get("lat", default_lat)
     current_lon = st.session_state.get("lon", default_lon)
@@ -297,7 +303,9 @@ with tab_producteur:
                 st.session_state["lat"], st.session_state["lon"] = selected_point
                 current_lat, current_lon = selected_point
 
-    location_map = folium.Map(location=[current_lat, current_lon], zoom_start=19, tiles=None)
+    location_map = folium.Map(
+        location=[current_lat, current_lon], zoom_start=20, max_zoom=22, tiles=None,
+    )
 
     # Curseur personnalise : un point rouge (meme couleur que le marqueur de
     # position choisie) suit la souris au survol de la carte.
@@ -310,10 +318,11 @@ with tab_producteur:
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         attr="Esri, Maxar, Earthstar Geographics",
         name="Vue satellite",
-        overlay=False, control=True, show=True,
+        overlay=False, control=True, show=True, max_zoom=22, max_native_zoom=19,
     ).add_to(location_map)
     folium.TileLayer(
         tiles="OpenStreetMap", name="Plan", overlay=False, control=True, show=False,
+        max_zoom=22, max_native_zoom=19,
     ).add_to(location_map)
 
     folium.CircleMarker(
@@ -408,7 +417,10 @@ with tab_producteur:
             )
 
         lookup_signature = (round(lat, 5), round(lon, 5), api_key)
-        should_lookup = api_key and st.session_state.get("_last_solar_lookup") != lookup_signature
+        should_lookup = (
+            bool(api_key) and position_chosen
+            and st.session_state.get("_last_solar_lookup") != lookup_signature
+        )
 
         if should_lookup:
             st.session_state["_last_solar_lookup"] = lookup_signature
@@ -557,7 +569,7 @@ with tab_producteur:
                 "environ 0.97 pour un onduleur recent."
             )
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         panel_power = c1.number_input(
             "Puissance unitaire (Wc)", min_value=100, max_value=700,
             value=int(cfg["pv"]["panel_power"]) if cfg else 640,
@@ -570,15 +582,17 @@ with tab_producteur:
             "Hauteur panneau (m)", min_value=0.5, max_value=3.0,
             value=float(cfg["pv"]["panel_height"]) if cfg else 2.382,
         )
-        c1, c2 = st.columns(2)
-        performance_ratio = c1.slider(
-            "Performance ratio (pertes systeme : cablage, temperature, salissures...)",
-            0.5, 1.0, float(cfg["pv"]["performance_ratio"]) if cfg else 0.86,
-        )
-        inverter_efficiency = c2.slider(
-            "Rendement onduleur",
-            0.8, 1.0, float(cfg["pv"]["inverter_efficiency"]) if cfg else 0.97,
-        )
+
+        with st.expander("⚙️ Parametres avances"):
+            c1, c2 = st.columns(2)
+            performance_ratio = c1.slider(
+                "Performance ratio (pertes systeme : cablage, temperature, salissures...)",
+                0.5, 1.0, float(cfg["pv"]["performance_ratio"]) if cfg else 0.86,
+            )
+            inverter_efficiency = c2.slider(
+                "Rendement onduleur",
+                0.8, 1.0, float(cfg["pv"]["inverter_efficiency"]) if cfg else 0.97,
+            )
         panel_power_kw = panel_power / 1000
 
         for pan in st.session_state["_pans"]:
@@ -586,12 +600,6 @@ with tab_producteur:
                 pan["width"], pan["height"], panel_width, panel_height, pan["orientation"]
             )
             pan["max_slots"] = cols_count * rows_count
-
-        for i, pan in enumerate(st.session_state["_pans"]):
-            if pan["max_slots"] == 0:
-                st.warning(f"Pan {i + 1} : aucun panneau ne tient avec ces dimensions.")
-            else:
-                st.caption(f"Pan {i + 1} : {pan['max_slots']} panneaux max.")
 
         total_slots = [p.get("max_slots", 0) for p in st.session_state["_pans"]]
 
@@ -807,7 +815,7 @@ with tab_producteur:
             )
         c1, c2 = st.columns(2)
         price_self = c1.number_input(
-            "Prix evite de l'electricite achetee (euros/kWh)",
+            "Tarif moyen de votre fournisseur d'electricite (euros/kWh)",
             min_value=0.0, max_value=1.0, value=0.2305, step=0.001, format="%.4f",
         )
         export_mode = c2.selectbox(
@@ -818,33 +826,32 @@ with tab_producteur:
                  "(obligation d'achat reglementee, ou tarif negocie en autoconsommation "
                  "collective). Valeurs indicatives a verifier selon votre contrat reel.",
         )
+
+        acc_price_gross, acc_turpe_reduced, acc_pmo_fee_pct = get_acc_tariff_settings()
+        is_acc_mode = export_mode == "Autoconsommation collective (tarif libre negocie)"
+
         if Investment.EXPORT_PRESETS[export_mode] is None:
             price_export = st.number_input(
                 "Tarif de revente personnalise (euros/kWh)",
                 min_value=0.0, max_value=1.0, value=0.10, step=0.001, format="%.4f",
             )
+            turpe_reduced = 0.0
+            pmo_fee_pct = 0.0
+        elif is_acc_mode:
+            price_export = acc_price_gross
+            turpe_reduced = acc_turpe_reduced
+            pmo_fee_pct = acc_pmo_fee_pct
+            st.caption(
+                f"Tarif fixe par Ivry Soleil Partage : {price_export:.4f} euros/kWh brut, "
+                f"dont {turpe_reduced:.4f} euros/kWh de TURPE reduit ACC -- non "
+                "modifiable ici (voir onglet Administration)."
+            )
         else:
             price_export = Investment.EXPORT_PRESETS[export_mode]
+            turpe_reduced = 0.0
+            pmo_fee_pct = 0.0
             st.caption(f"Tarif retenu : {price_export:.4f} euros/kWh (valeur indicative).")
 
-        tc1, tc2 = st.columns(2)
-        turpe_reduced = tc1.number_input(
-            "TURPE reduit ACC (euros/kWh, deduit de la revente)",
-            min_value=0.0, max_value=0.20, value=0.02, step=0.005, format="%.4f",
-            help="Cout d'acces au reseau, reduit en autoconsommation collective "
-                 "(l'energie partagee localement transite sur une courte distance). "
-                 "Pre-rempli a 0,02 euros/kWh (valeur indicative communiquee pour ce "
-                 "projet) -- reste editable si ta grille tarifaire reelle differe "
-                 "(voir photovoltaique.info pour la grille TURPE en vigueur).",
-        )
-        pmo_fee_pct = tc2.number_input(
-            "Frais de gestion PMO (% de la revente)",
-            min_value=0.0, max_value=50.0, value=0.0, step=1.0,
-            help="Part eventuellement retenue par la Personne Morale Organisatrice "
-                 "(l'entite qui gere l'operation d'autoconsommation collective, "
-                 "ex. l'association) pour couvrir ses frais de fonctionnement. "
-                 "0% si l'association ne preleve rien ou si non applicable.",
-        ) / 100
         if turpe_reduced > 0 or pmo_fee_pct > 0:
             net_export_preview = max(price_export * (1 - pmo_fee_pct) - turpe_reduced, 0.0)
             st.caption(
@@ -1355,6 +1362,33 @@ with tab_admin:
             if st.form_submit_button("Mettre a jour les objectifs"):
                 set_targets(new_prod_target, new_conso_target)
                 st.success("Objectifs mis a jour.")
+                st.rerun()
+
+        st.markdown("### \U0001F4B6 Tarif de revente ACC (fixe pour tous les membres)")
+        st.caption(
+            "Ces valeurs remplacent les champs TURPE/PMO qui etaient auparavant "
+            "editables dans le formulaire de simulation (onglet Producteur) -- "
+            "elles s'appliquent des qu'un-e utilisateur-ice choisit la "
+            "configuration \"Autoconsommation collective\" pour la revente."
+        )
+        cur_acc_price, cur_turpe, cur_pmo = get_acc_tariff_settings()
+        with st.form("tariff_form"):
+            tf1, tf2, tf3 = st.columns(3)
+            new_acc_price = tf1.number_input(
+                "Prix brut ACC (euros/kWh)", min_value=0.0, max_value=1.0,
+                value=float(cur_acc_price), step=0.005, format="%.4f",
+            )
+            new_turpe = tf2.number_input(
+                "TURPE reduit ACC (euros/kWh)", min_value=0.0, max_value=0.5,
+                value=float(cur_turpe), step=0.005, format="%.4f",
+            )
+            new_pmo_pct = tf3.number_input(
+                "Frais de gestion PMO (%)", min_value=0.0, max_value=50.0,
+                value=float(cur_pmo * 100), step=1.0,
+            )
+            if st.form_submit_button("Mettre a jour le tarif ACC"):
+                set_acc_tariff_settings(new_acc_price, new_turpe, new_pmo_pct / 100)
+                st.success("Tarif ACC mis a jour.")
                 st.rerun()
 
         st.markdown("### \U0001F506 Soumissions producteurs en attente")
