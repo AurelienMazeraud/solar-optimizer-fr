@@ -192,14 +192,18 @@ st.markdown(
     """
     <style>
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+        gap: 12px;
+        width: 100%;
     }
     .stTabs [data-baseweb="tab-list"] button {
-        padding: 16px 28px !important;
+        flex: 1 1 0;
+        padding: 26px 28px !important;
     }
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        font-size: 1.35rem !important;
+        font-size: 2rem !important;
         font-weight: 700 !important;
+        text-align: center;
+        width: 100%;
     }
     </style>
     """,
@@ -385,138 +389,78 @@ with tab_producteur:
 
     if not is_existing_mode:
 
-        with st.expander("\U0001F50E Reperage automatique du toit (Google Solar API, optionnel)", expanded=True):
-
+        server_key = ""
+        try:
+            server_key = st.secrets.get("GOOGLE_SOLAR_API_KEY", "")
+        except Exception:
             server_key = ""
+
+        if server_key:
+            api_key = server_key
+        else:
+            api_key = st.text_input(
+                "Cle API Google Solar (test local uniquement)",
+                value="",
+                type="password",
+                help="Pour un usage durable/deploye, stocke plutot la cle dans "
+                     "`.streamlit/secrets.toml` (GOOGLE_SOLAR_API_KEY = \"...\") -- "
+                     "ce fichier est deja exclu du depot Git.",
+            )
+
+        lookup_signature = (round(lat, 5), round(lon, 5), api_key)
+        should_lookup = api_key and st.session_state.get("_last_solar_lookup") != lookup_signature
+
+        if should_lookup:
+            st.session_state["_last_solar_lookup"] = lookup_signature
             try:
-                server_key = st.secrets.get("GOOGLE_SOLAR_API_KEY", "")
-            except Exception:
-                server_key = ""
-
-            if server_key:
-                api_key = server_key
-                st.caption("Cle API configuree cote serveur (non visible des visiteurs).")
+                result = get_roof_segments(lat, lon, api_key)
+            except SolarApiError as exc:
+                st.session_state["_roof_overlay"] = None
+                st.session_state["_roof_fetch_error"] = str(exc)
+                st.session_state["_roof_fetch_summary"] = None
             else:
-                st.warning(
-                    "Aucune cle configuree cote serveur. Le champ ci-dessous est "
-                    "uniquement pour un test local : ne l'utilise jamais sur une "
-                    "app publique, la valeur saisie resterait visible/inspectable "
-                    "par n'importe quel visiteur de la page.",
-                    icon="⚠️",
-                )
-                api_key = st.text_input(
-                    "Cle API Google Solar (test local uniquement)",
-                    value="",
-                    type="password",
-                    help="Pour un usage durable/deploye, stocke plutot la cle dans "
-                         "`.streamlit/secrets.toml` (GOOGLE_SOLAR_API_KEY = \"...\") -- "
-                         "ce fichier est deja exclu du depot Git.",
-                )
+                segments = result["segments"]
+                n_found = len(segments)
 
-            lookup_signature = (round(lat, 5), round(lon, 5), api_key)
-            force_retry = st.button("Relancer la detection du toit")
-            should_lookup = api_key and (
-                force_retry or st.session_state.get("_last_solar_lookup") != lookup_signature
+                new_pans = []
+                for seg in segments:
+                    side = math.sqrt(max(seg["area"], 1.0))
+                    new_pans.append(new_pan(
+                        tilt=int(round(seg["tilt"])),
+                        azimuth=int(round(seg["azimuth"])),
+                        width=round(side, 1), height=round(side, 1),
+                    ))
+                st.session_state["_pans"] = new_pans
+
+                max_panels = result.get("max_panels_count")
+                panel_w = result.get("panel_capacity_watts")
+                panel_h_m = result.get("panel_height_m")
+                panel_w_m = result.get("panel_width_m")
+                ref_bits = []
+                if panel_w:
+                    ref_bits.append(f"{panel_w:.0f} Wc")
+                if panel_h_m and panel_w_m:
+                    ref_bits.append(f"{panel_h_m:.2f} x {panel_w_m:.2f} m")
+
+                st.session_state["_roof_overlay"] = {
+                    "segments": segments,
+                    "building_bbox": result.get("building_bbox"),
+                }
+                st.session_state["_roof_fetch_error"] = None
+                st.session_state["_roof_fetch_summary"] = {
+                    "n_found": n_found, "max_panels": max_panels, "ref_bits": ref_bits,
+                }
+            st.rerun()
+
+        if st.session_state.get("_roof_fetch_error"):
+            st.error(st.session_state["_roof_fetch_error"])
+        elif st.session_state.get("_roof_fetch_summary"):
+            st.info(
+                "Merci de bien verifier ces informations avant de valider la "
+                "simulation de pose de panneaux solaire. A noter que la totalite "
+                "du toit n'est pas toujours equipable, une visite technique par "
+                "un professionnel agree permettra de valider ces informations."
             )
-
-            if should_lookup:
-                st.session_state["_last_solar_lookup"] = lookup_signature
-                try:
-                    result = get_roof_segments(lat, lon, api_key)
-                except SolarApiError as exc:
-                    st.session_state["_roof_overlay"] = None
-                    st.session_state["_roof_fetch_error"] = str(exc)
-                    st.session_state["_roof_fetch_summary"] = None
-                else:
-                    segments = result["segments"]
-                    n_found = len(segments)
-
-                    new_pans = []
-                    for seg in segments:
-                        side = math.sqrt(max(seg["area"], 1.0))
-                        new_pans.append(new_pan(
-                            tilt=int(round(seg["tilt"])),
-                            azimuth=int(round(seg["azimuth"])),
-                            width=round(side, 1), height=round(side, 1),
-                        ))
-                    st.session_state["_pans"] = new_pans
-
-                    max_panels = result.get("max_panels_count")
-                    panel_w = result.get("panel_capacity_watts")
-                    panel_h_m = result.get("panel_height_m")
-                    panel_w_m = result.get("panel_width_m")
-                    ref_bits = []
-                    if panel_w:
-                        ref_bits.append(f"{panel_w:.0f} Wc")
-                    if panel_h_m and panel_w_m:
-                        ref_bits.append(f"{panel_h_m:.2f} x {panel_w_m:.2f} m")
-
-                    st.session_state["_roof_overlay"] = {
-                        "segments": segments,
-                        "building_bbox": result.get("building_bbox"),
-                    }
-                    st.session_state["_roof_fetch_error"] = None
-                    st.session_state["_roof_fetch_summary"] = {
-                        "n_found": n_found, "max_panels": max_panels, "ref_bits": ref_bits,
-                    }
-                st.rerun()
-
-            if st.session_state.get("_roof_fetch_error"):
-                st.error(st.session_state["_roof_fetch_error"])
-            elif st.session_state.get("_roof_fetch_summary"):
-                st.info(
-                    "Merci de bien verifier ces informations avant de valider la "
-                    "simulation de pose de panneaux solaire. A noter que la totalite "
-                    "du toit n'est pas toujours equipable, une visite technique par "
-                    "un professionnel agree permettra de valider ces informations."
-                )
-            elif not api_key:
-                st.caption(
-                    "Renseigne une cle (ci-dessus, ou dans secrets.toml) pour activer "
-                    "la detection automatique."
-                )
-            else:
-                st.caption("Position deja analysee pour cette cle -- clique sur le bouton pour relancer.")
-
-        st.subheader("\U0001F527 Modules photovoltaiques")
-
-        with st.expander("Pourquoi ces informations ?"):
-            st.markdown(
-                "La **puissance crete (Wc)** est la puissance maximale du panneau "
-                "dans des conditions de test standard (plein soleil, 25 degres) -- en "
-                "usage reel, la production est toujours un peu inferieure. Les "
-                "**dimensions** (largeur/hauteur) determinent combien de panneaux "
-                "tiennent physiquement sur chaque pan de toit. Le **performance "
-                "ratio** regroupe les pertes reelles (cablage, echauffement, "
-                "salissures, ombrage partiel...) -- 0.85 est une valeur courante en "
-                "France. Le **rendement onduleur** est la perte de conversion du "
-                "courant continu (panneaux) vers le courant alternatif (maison) : "
-                "environ 0.97 pour un onduleur recent."
-            )
-
-        c1, c2, c3, c4 = st.columns(4)
-        panel_power = c1.number_input(
-            "Puissance unitaire (Wc)", min_value=100, max_value=700,
-            value=int(cfg["pv"]["panel_power"]) if cfg else 640,
-        )
-        panel_width = c2.number_input(
-            "Largeur panneau (m)", min_value=0.5, max_value=3.0,
-            value=float(cfg["pv"]["panel_width"]) if cfg else 1.134,
-        )
-        panel_height = c3.number_input(
-            "Hauteur panneau (m)", min_value=0.5, max_value=3.0,
-            value=float(cfg["pv"]["panel_height"]) if cfg else 2.382,
-        )
-        c1, c2 = st.columns(2)
-        performance_ratio = c1.slider(
-            "Performance ratio (pertes systeme : cablage, temperature, salissures...)",
-            0.5, 1.0, float(cfg["pv"]["performance_ratio"]) if cfg else 0.86,
-        )
-        inverter_efficiency = c2.slider(
-            "Rendement onduleur",
-            0.8, 1.0, float(cfg["pv"]["inverter_efficiency"]) if cfg else 0.97,
-        )
-        panel_power_kw = panel_power / 1000
 
         st.subheader("\U0001F3E0 Pans de toiture")
 
@@ -529,8 +473,9 @@ with tab_producteur:
                 "**largeur/hauteur** qui determinent combien de panneaux "
                 "tiennent physiquement dessus. Modifie librement ces valeurs, "
                 "supprime les pans qui ne conviennent pas avec la croix, ou "
-                "ajoute-en manuellement -- le nombre de panneaux a installer se "
-                "regle juste apres, une fois les pans corrects."
+                "ajoute-en manuellement. Une fois tes pans valides, choisis ton "
+                "modele de panneau juste apres : le nombre de panneaux "
+                "installables sur chaque pan s'affichera alors."
             )
 
         if "_pans" not in st.session_state:
@@ -587,14 +532,6 @@ with tab_producteur:
                             index=0 if pan["orientation"] == "Portrait" else 1,
                             horizontal=True, key=f"pan_orient_{uid}",
                         )
-                        cols_count, rows_count = panel_grid_dims(
-                            pan["width"], pan["height"], panel_width, panel_height, pan["orientation"]
-                        )
-                        pan["max_slots"] = cols_count * rows_count
-                        if pan["max_slots"] == 0:
-                            st.warning("Aucun panneau ne tient sur ce pan avec ces dimensions.")
-                        else:
-                            st.caption(f"{pan['max_slots']} panneaux max ({cols_count}x{rows_count}).")
 
         if pan_to_delete is not None:
             st.session_state["_pans"] = [p for p in pans if p["uid"] != pan_to_delete]
@@ -603,6 +540,58 @@ with tab_producteur:
         if st.button("+ Ajouter un pan"):
             st.session_state["_pans"].append(new_pan())
             st.rerun()
+
+        st.subheader("\U0001F527 Modules photovoltaiques")
+
+        with st.expander("Pourquoi ces informations ?"):
+            st.markdown(
+                "La **puissance crete (Wc)** est la puissance maximale du panneau "
+                "dans des conditions de test standard (plein soleil, 25 degres) -- en "
+                "usage reel, la production est toujours un peu inferieure. Les "
+                "**dimensions** (largeur/hauteur) determinent combien de panneaux "
+                "tiennent physiquement sur chaque pan de toit. Le **performance "
+                "ratio** regroupe les pertes reelles (cablage, echauffement, "
+                "salissures, ombrage partiel...) -- 0.85 est une valeur courante en "
+                "France. Le **rendement onduleur** est la perte de conversion du "
+                "courant continu (panneaux) vers le courant alternatif (maison) : "
+                "environ 0.97 pour un onduleur recent."
+            )
+
+        c1, c2, c3, c4 = st.columns(4)
+        panel_power = c1.number_input(
+            "Puissance unitaire (Wc)", min_value=100, max_value=700,
+            value=int(cfg["pv"]["panel_power"]) if cfg else 640,
+        )
+        panel_width = c2.number_input(
+            "Largeur panneau (m)", min_value=0.5, max_value=3.0,
+            value=float(cfg["pv"]["panel_width"]) if cfg else 1.134,
+        )
+        panel_height = c3.number_input(
+            "Hauteur panneau (m)", min_value=0.5, max_value=3.0,
+            value=float(cfg["pv"]["panel_height"]) if cfg else 2.382,
+        )
+        c1, c2 = st.columns(2)
+        performance_ratio = c1.slider(
+            "Performance ratio (pertes systeme : cablage, temperature, salissures...)",
+            0.5, 1.0, float(cfg["pv"]["performance_ratio"]) if cfg else 0.86,
+        )
+        inverter_efficiency = c2.slider(
+            "Rendement onduleur",
+            0.8, 1.0, float(cfg["pv"]["inverter_efficiency"]) if cfg else 0.97,
+        )
+        panel_power_kw = panel_power / 1000
+
+        for pan in st.session_state["_pans"]:
+            cols_count, rows_count = panel_grid_dims(
+                pan["width"], pan["height"], panel_width, panel_height, pan["orientation"]
+            )
+            pan["max_slots"] = cols_count * rows_count
+
+        for i, pan in enumerate(st.session_state["_pans"]):
+            if pan["max_slots"] == 0:
+                st.warning(f"Pan {i + 1} : aucun panneau ne tient avec ces dimensions.")
+            else:
+                st.caption(f"Pan {i + 1} : {pan['max_slots']} panneaux max.")
 
         total_slots = [p.get("max_slots", 0) for p in st.session_state["_pans"]]
 
@@ -1259,7 +1248,7 @@ with tab_consommateur:
         ) / 100
         prix_acc = ec2.number_input(
             "Prix propose pour l'energie ACC (euros/kWh)",
-            min_value=0.0, max_value=1.0, value=0.20, step=0.005, format="%.4f",
+            min_value=0.0, max_value=1.0, value=0.15, step=0.005, format="%.4f",
             help="Tarif indicatif -- a fixer par la convention de l'association.",
         )
         energie_acc_kwh = reviewed["consumption"] * taux_couverture
