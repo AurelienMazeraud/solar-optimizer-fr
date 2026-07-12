@@ -32,12 +32,28 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 COMPASS_LABELS = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"]
 
+METERS_PER_DEG_LAT = 111320.0
+
 
 def compass_direction(azimuth_deg):
     """Convertit un azimut en degres (0=Nord, 90=Est, 180=Sud, 270=Ouest)
     en direction cardinale/inter-cardinale lisible (N, NE, E, SE, S, SO, O, NO)."""
     idx = int(((azimuth_deg % 360) + 22.5) // 45) % 8
     return COMPASS_LABELS[idx]
+
+
+def offset_point(center, distance_m, bearing_deg):
+    """Renvoie le point (lat, lon) situe a distance_m metres de center, dans
+    la direction bearing_deg (0=Nord, 90=Est, 180=Sud, 270=Ouest, sens
+    horaire comme une boussole). Approximation plane valable sur de petites
+    distances (quelques dizaines de metres), largement suffisante pour
+    positionner une fleche d'orientation sur un pan de toiture."""
+    lat, lon = center
+    bearing_rad = math.radians(bearing_deg)
+    meters_per_deg_lon = METERS_PER_DEG_LAT * max(math.cos(math.radians(lat)), 0.01)
+    dn = distance_m * math.cos(bearing_rad)
+    de = distance_m * math.sin(bearing_rad)
+    return (lat + dn / METERS_PER_DEG_LAT, lon + de / meters_per_deg_lon)
 
 
 @st.cache_data(show_spinner="Recuperation des donnees meteo (PVGIS)...", ttl=60 * 60 * 24)
@@ -229,20 +245,40 @@ if roof_overlay:
         folium.Rectangle(
             bounds=[building_bbox["sw"], building_bbox["ne"]],
             color="#888888", weight=1, fill=False, dash_array="4",
-            tooltip="Batiment detecte par Google Solar API",
+            tooltip="Emprise du batiment detecte par Google Solar API "
+                     "(a comparer a la vue satellite pour verifier le bon batiment)",
         ).add_to(location_map)
     for i, seg in enumerate(roof_overlay.get("segments", [])):
-        seg_bbox = seg.get("bbox")
-        if not seg_bbox:
+        seg_center = seg.get("center")
+        if not seg_center:
             continue
         color = SEGMENT_COLORS[i % len(SEGMENT_COLORS)]
-        folium.Rectangle(
-            bounds=[seg_bbox["sw"], seg_bbox["ne"]],
-            color=color, weight=2, fill=True, fill_color=color, fill_opacity=0.3,
-            tooltip=(
-                f"Pan {i + 1} -- inclinaison {seg['tilt']:.0f} deg, "
-                f"azimut {seg['azimuth']:.0f} deg, surface {seg['area']:.0f} m2"
-            ),
+        tooltip_text = (
+            f"Pan {i + 1} -- inclinaison {seg['tilt']:.0f} deg, "
+            f"azimut {seg['azimuth']:.0f} deg ({compass_direction(seg['azimuth'])}), "
+            f"surface {seg['area']:.0f} m2"
+        )
+        side = math.sqrt(max(seg["area"], 1.0))
+        arrow_len = max(4.0, side * 0.6)
+        tip = offset_point(seg_center, arrow_len, seg["azimuth"])
+        # Google Solar API ne fournit pas le polygone exact du pan (juste un
+        # centre, une surface et une boite englobante toujours alignee
+        # nord-sud/est-ouest) : dessiner cette boite comme un rectangle
+        # donnait l'impression trompeuse que tous les pans etaient orientes
+        # plein nord et se chevauchaient. On affiche a la place un point
+        # (position du pan) et une fleche pointant dans le sens reel de
+        # l'azimut, ce qui refletee fidelement l'orientation sans pretendre
+        # connaitre la forme exacte du pan.
+        folium.PolyLine(
+            locations=[seg_center, tip],
+            color=color, weight=4, opacity=0.9,
+            tooltip=tooltip_text,
+        ).add_to(location_map)
+        folium.CircleMarker(
+            location=seg_center,
+            radius=7, color=color, weight=2,
+            fill=True, fill_color=color, fill_opacity=0.9,
+            tooltip=tooltip_text,
         ).add_to(location_map)
 
 folium.LayerControl(collapsed=True).add_to(location_map)
@@ -290,18 +326,23 @@ if not is_existing_mode:
         st.caption(
             "Des qu'une position est choisie ci-dessus (adresse ou clic sur la "
             "carte), l'inclinaison, l'azimut et la surface de chaque pan de "
-            "toiture sont recuperes automatiquement et affiches directement sur "
-            "la carte (rectangles colores). 10 000 requetes gratuites par mois "
-            "chez Google -- largement suffisant pour un usage ponctuel."
+            "toiture sont recuperes automatiquement. Chaque pan est represente "
+            "sur la carte par un point colore et une fleche pointant dans le "
+            "sens reel de l'azimut (voir encadre ci-dessous). 10 000 requetes "
+            "gratuites par mois chez Google -- largement suffisant pour un "
+            "usage ponctuel."
         )
         st.info(
-            "Attention : l'algorithme de Google (base sur imagerie/LIDAR) peut se tromper, "
-            "surtout sur les toits plats, complexes ou de petite taille (ex : une "
-            "inclinaison affichee a 27 deg alors que le toit est plat). Compare "
-            "toujours les rectangles colores a la vue satellite ci-dessus, et "
-            "corrige librement les valeurs dans la section \"Toiture(s)\" "
-            "ci-dessous si elles ne correspondent pas a la realite -- le calcul "
-            "utilise les valeurs du formulaire, pas directement celles de Google.",
+            "Limite importante : Google Solar API ne fournit ni la forme exacte "
+            "de chaque pan de toiture, ni son orientation dans l'espace -- "
+            "seulement un point central, une surface, une inclinaison et un "
+            "azimut. Il est donc normal que la position exacte du batiment "
+            "sur la carte (rectangle gris en pointilles) et le point/fleche de "
+            "chaque pan restent approximatifs, notamment sur les toits plats, "
+            "complexes ou de petite taille. Les valeurs (inclinaison, azimut, "
+            "dimensions) restent a comparer a la vue satellite et a corriger "
+            "manuellement dans la section \"Toiture(s)\" ci-dessous si besoin "
+            "-- c'est bien le formulaire, pas la carte, qui alimente le calcul.",
             icon="ℹ️",
         )
 
@@ -382,9 +423,9 @@ if not is_existing_mode:
             summary = st.session_state["_roof_fetch_summary"]
             st.success(
                 f"{summary['n_found']} pan(s) de toiture detecte(s), affiches sur la "
-                "carte ci-dessus et pre-remplis ci-dessous (inclinaison, azimut ; "
-                "largeur/hauteur approximees en carre a partir de la surface -- a "
-                "ajuster si besoin)."
+                "carte ci-dessus (point + fleche d'orientation) et pre-remplis "
+                "ci-dessous (inclinaison, azimut ; largeur/hauteur approximees "
+                "en carre a partir de la surface -- a ajuster si besoin)."
             )
             if summary["max_panels"]:
                 ref = f" (panneau de reference Google : {', '.join(summary['ref_bits'])})" if summary["ref_bits"] else ""
@@ -774,13 +815,12 @@ with st.form("simulation"):
     tc1, tc2 = st.columns(2)
     turpe_reduced = tc1.number_input(
         "TURPE reduit ACC (euros/kWh, deduit de la revente)",
-        min_value=0.0, max_value=0.20, value=0.0, step=0.005, format="%.4f",
+        min_value=0.0, max_value=0.20, value=0.02, step=0.005, format="%.4f",
         help="Cout d'acces au reseau, reduit en autoconsommation collective "
              "(l'energie partagee localement transite sur une courte distance). "
-             "Concerne surtout le mode \"autoconsommation collective\" -- "
-             "valeur non pre-remplie car elle depend de la puissance souscrite "
-             "et de la grille TURPE en vigueur (voir photovoltaique.info). "
-             "Laisser a 0 si non applicable ou pas encore connu.",
+             "Pre-rempli a 0,02 euros/kWh (valeur indicative communiquee pour ce "
+             "projet) -- reste editable si ta grille tarifaire reelle differe "
+             "(voir photovoltaique.info pour la grille TURPE en vigueur).",
     )
     pmo_fee_pct = tc2.number_input(
         "Frais de gestion PMO (% de la revente)",
