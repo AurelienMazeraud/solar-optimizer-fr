@@ -1,3 +1,4 @@
+import base64
 import math
 import re
 
@@ -33,6 +34,17 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 COMPASS_LABELS = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"]
 
 METERS_PER_DEG_LAT = 111320.0
+
+MARKER_RED = "#d62728"
+
+CURSOR_DOT_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">'
+    '<circle cx="10" cy="10" r="7" fill="' + MARKER_RED + '" fill-opacity="0.9" '
+    'stroke="white" stroke-width="2"/></svg>'
+)
+CURSOR_DOT_DATA_URI = "data:image/svg+xml;base64," + base64.b64encode(
+    CURSOR_DOT_SVG.encode("utf-8")
+).decode("ascii")
 
 
 def compass_direction(azimuth_deg):
@@ -116,6 +128,16 @@ def auto_distribute(desired_total, slot_counts):
     return alloc
 
 
+def new_pan(tilt=30, azimuth=180, width=4.0, height=4.0, orientation="Portrait"):
+    st.session_state["_pan_uid_counter"] = st.session_state.get("_pan_uid_counter", 0) + 1
+    return {
+        "uid": st.session_state["_pan_uid_counter"],
+        "tilt": tilt, "azimuth": azimuth,
+        "width": width, "height": height,
+        "orientation": orientation,
+    }
+
+
 cfg = load_defaults()
 
 st.title("☀️ Calculateur d'efficacite de panneau solaire")
@@ -154,41 +176,38 @@ is_existing_mode = mode.startswith("J'ai deja")
 
 # ------------------------------------------------------------------
 # Localisation : recherche d'adresse (avec suggestions a choisir) +
-# carte interactive + champs precis. En dehors du formulaire pour une
-# mise a jour immediate (les widgets dans un st.form ne redeclenchent
-# pas de calcul avant validation). Utile dans les deux modes (sert
-# aussi au pre-remplissage de l'adresse dans le formulaire de contact).
+# carte interactive. Simplifie au maximum : plus de champs
+# latitude/longitude/altitude visibles, la position se choisit
+# uniquement via l'adresse ou un clic sur la carte.
 # ------------------------------------------------------------------
 st.subheader("\U0001F4CD Localisation")
 
 with st.expander("Pourquoi ces informations ?"):
     st.markdown(
-        "La quantite de soleil recue depend de l'endroit ou l'on se trouve "
-        "(latitude/longitude) : plus on est au sud en France, plus l'ensoleillement "
-        "annuel est important. L'altitude influence legerement la production "
-        "(air plus clair en altitude, mais aussi plus froid, ce qui ameliore "
-        "un peu le rendement des panneaux). Ces trois valeurs servent a "
-        "interroger la base meteo europeenne PVGIS pour reconstituer une "
-        "annee type heure par heure -- utile surtout si tu simules un "
+        "La position (latitude/longitude) determine l'ensoleillement annuel "
+        "recu (plus on est au sud en France, plus il est important) : elle "
+        "sert a interroger la base meteo europeenne PVGIS pour reconstituer "
+        "une annee type heure par heure -- utile surtout si tu simules un "
         "nouveau projet."
     )
 
 default_lat = float(cfg["site"]["latitude"]) if cfg else 48.815
 default_lon = float(cfg["site"]["longitude"]) if cfg else 2.385
+default_altitude = float(cfg["site"]["altitude"]) if cfg else 45.0
 
 current_lat = st.session_state.get("lat", default_lat)
 current_lon = st.session_state.get("lon", default_lon)
 
 st.caption(
     "Tape une adresse puis choisis-la dans la liste, ou clique directement "
-    "sur la carte pour placer le point sur ta maison -- les champs "
-    "latitude/longitude se mettent a jour automatiquement, et **des qu'une "
-    "position est choisie, la detection du toit se lance toute seule** "
-    "(section ci-dessous) si une cle API est configuree. Bascule sur la vue "
-    "satellite (icone en haut a droite de la carte) pour verifier que le "
-    "toit detecte correspond bien a ta maison. Si l'adresse tapee ne "
-    "remonte rien ou le mauvais endroit, essaie avec juste \"numero + rue + "
-    "ville\" (sans code postal), ou clique directement sur la carte."
+    "sur la carte pour placer le point sur ta maison (le curseur devient un "
+    "point rouge au survol de la carte). Des qu'une position est choisie, "
+    "**la detection du toit se lance toute seule** (section ci-dessous) si "
+    "une cle API est configuree. Bascule sur la vue satellite (icone en "
+    "haut a droite de la carte) pour verifier que le toit detecte "
+    "correspond bien a ta maison. Si l'adresse tapee ne remonte rien ou le "
+    "mauvais endroit, essaie avec juste \"numero + rue + ville\" (sans code "
+    "postal), ou clique directement sur la carte."
 )
 
 address = st.text_input(
@@ -221,6 +240,15 @@ if candidates:
             current_lat, current_lon = selected_point
 
 location_map = folium.Map(location=[current_lat, current_lon], zoom_start=19, tiles=None)
+
+# Curseur personnalise : un point rouge (meme couleur que le marqueur de
+# position choisie) suit la souris au survol de la carte, pour que le clic
+# a venir soit previsible.
+location_map.get_root().html.add_child(folium.Element(
+    "<style>.leaflet-container { cursor: url('" + CURSOR_DOT_DATA_URI +
+    "') 10 10, crosshair !important; }</style>"
+))
+
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     attr="Esri, Maxar, Earthstar Geographics",
@@ -233,8 +261,8 @@ folium.TileLayer(
 
 folium.CircleMarker(
     location=[current_lat, current_lon],
-    radius=9, color="#d62728", weight=2,
-    fill=True, fill_color="#d62728", fill_opacity=0.85,
+    radius=9, color=MARKER_RED, weight=2,
+    fill=True, fill_color=MARKER_RED, fill_opacity=0.85,
     tooltip="Position actuelle -- clique ailleurs pour la deplacer",
 ).add_to(location_map)
 
@@ -263,12 +291,8 @@ if roof_overlay:
         tip = offset_point(seg_center, arrow_len, seg["azimuth"])
         # Google Solar API ne fournit pas le polygone exact du pan (juste un
         # centre, une surface et une boite englobante toujours alignee
-        # nord-sud/est-ouest) : dessiner cette boite comme un rectangle
-        # donnait l'impression trompeuse que tous les pans etaient orientes
-        # plein nord et se chevauchaient. On affiche a la place un point
-        # (position du pan) et une fleche pointant dans le sens reel de
-        # l'azimut, ce qui refletee fidelement l'orientation sans pretendre
-        # connaitre la forme exacte du pan.
+        # nord-sud/est-ouest) : on affiche a la place un point (position du
+        # pan) et une fleche pointant dans le sens reel de l'azimut.
         folium.PolyLine(
             locations=[seg_center, tip],
             color=color, weight=4, opacity=0.9,
@@ -295,24 +319,14 @@ if clicked:
         st.session_state["lat"], st.session_state["lon"] = click_point
         st.rerun()
 
-c1, c2, c3 = st.columns(3)
-lat = c1.number_input(
-    "Latitude", min_value=-90.0, max_value=90.0,
-    value=current_lat, format="%.4f", key="lat",
-)
-lon = c2.number_input(
-    "Longitude", min_value=-180.0, max_value=180.0,
-    value=current_lon, format="%.4f", key="lon",
-)
-altitude = c3.number_input(
-    "Altitude (m)", min_value=0.0, max_value=4000.0,
-    value=float(cfg["site"]["altitude"]) if cfg else 45.0,
-)
+lat = st.session_state.get("lat", current_lat)
+lon = st.session_state.get("lon", current_lon)
+altitude = default_altitude
 
 # ------------------------------------------------------------------
-# Les sections suivantes (detection du toit, modules PV, repartition
-# des panneaux) ne concernent que la simulation d'un nouveau projet :
-# si l'utilisateur a deja une installation, il entrera directement ses
+# Les sections suivantes (detection du toit, modules PV, pans de
+# toiture) ne concernent que la simulation d'un nouveau projet : si
+# l'utilisateur a deja une installation, il entrera directement ses
 # chiffres reels plus bas, dans le formulaire.
 # ------------------------------------------------------------------
 panel_power_kw = 0.0
@@ -328,21 +342,21 @@ if not is_existing_mode:
             "carte), l'inclinaison, l'azimut et la surface de chaque pan de "
             "toiture sont recuperes automatiquement. Chaque pan est represente "
             "sur la carte par un point colore et une fleche pointant dans le "
-            "sens reel de l'azimut (voir encadre ci-dessous). 10 000 requetes "
-            "gratuites par mois chez Google -- largement suffisant pour un "
-            "usage ponctuel."
+            "sens reel de l'azimut, et sous forme de carte editable dans la "
+            "section \"Pans de toiture\" ci-dessous. 10 000 requetes gratuites "
+            "par mois chez Google -- largement suffisant pour un usage ponctuel."
         )
         st.info(
             "Limite importante : Google Solar API ne fournit ni la forme exacte "
             "de chaque pan de toiture, ni son orientation dans l'espace -- "
             "seulement un point central, une surface, une inclinaison et un "
-            "azimut. Il est donc normal que la position exacte du batiment "
-            "sur la carte (rectangle gris en pointilles) et le point/fleche de "
-            "chaque pan restent approximatifs, notamment sur les toits plats, "
-            "complexes ou de petite taille. Les valeurs (inclinaison, azimut, "
-            "dimensions) restent a comparer a la vue satellite et a corriger "
-            "manuellement dans la section \"Toiture(s)\" ci-dessous si besoin "
-            "-- c'est bien le formulaire, pas la carte, qui alimente le calcul.",
+            "azimut. Il est donc normal que la position exacte du batiment sur "
+            "la carte et le point/fleche de chaque pan restent approximatifs, "
+            "notamment sur les toits plats, complexes ou de petite taille. Les "
+            "valeurs restent a comparer a la vue satellite et a corriger "
+            "directement sur les cartes \"Pans de toiture\" ci-dessous -- ce "
+            "sont bien ces cartes, pas la carte geographique, qui alimentent "
+            "le calcul.",
             icon="ℹ️",
         )
 
@@ -389,13 +403,16 @@ if not is_existing_mode:
             else:
                 segments = result["segments"]
                 n_found = len(segments)
-                st.session_state["n_sections"] = min(max(n_found, 1), 4)
-                for i, seg in enumerate(segments):
-                    st.session_state[f"tilt_{i}"] = int(round(seg["tilt"]))
-                    st.session_state[f"az_{i}"] = int(round(seg["azimuth"]))
+
+                new_pans = []
+                for seg in segments:
                     side = math.sqrt(max(seg["area"], 1.0))
-                    st.session_state[f"width_{i}"] = round(side, 1)
-                    st.session_state[f"height_{i}"] = round(side, 1)
+                    new_pans.append(new_pan(
+                        tilt=int(round(seg["tilt"])),
+                        azimuth=int(round(seg["azimuth"])),
+                        width=round(side, 1), height=round(side, 1),
+                    ))
+                st.session_state["_pans"] = new_pans
 
                 max_panels = result.get("max_panels_count")
                 panel_w = result.get("panel_capacity_watts")
@@ -424,8 +441,7 @@ if not is_existing_mode:
             st.success(
                 f"{summary['n_found']} pan(s) de toiture detecte(s), affiches sur la "
                 "carte ci-dessus (point + fleche d'orientation) et pre-remplis "
-                "ci-dessous (inclinaison, azimut ; largeur/hauteur approximees "
-                "en carre a partir de la surface -- a ajuster si besoin)."
+                "sous forme de cartes ci-dessous -- a ajuster si besoin."
             )
             if summary["max_panels"]:
                 ref = f" (panneau de reference Google : {', '.join(summary['ref_bits'])})" if summary["ref_bits"] else ""
@@ -484,103 +500,93 @@ if not is_existing_mode:
     )
     panel_power_kw = panel_power / 1000
 
-    st.subheader("\U0001F3E0 Toiture(s) & repartition des panneaux")
+    st.subheader("\U0001F3E0 Pans de toiture")
 
     with st.expander("Pourquoi ces informations ?"):
         st.markdown(
-            "**Inclinaison** : 0 deg = toit plat, 90 deg = mur vertical (la plupart "
-            "des toits francais sont entre 15 et 45 degres). **Azimut** : 0=Nord, "
-            "90=Est, 180=Sud, 270=Ouest -- un pan plein Sud recoit "
-            "generalement le plus de soleil sur l'annee. **Largeur/hauteur du "
-            "pan** servent a calculer combien de panneaux tiennent physiquement "
-            "dessus, en fonction de leur taille et de leur orientation "
-            "(portrait ou paysage). Ensuite, choisis toi-meme **combien de "
-            "panneaux tu veux installer** et **comment les repartir** entre les "
-            "pans avec un curseur par pan -- le nombre affiche est ce qui est "
-            "reellement compte dans la simulation."
+            "Chaque carte ci-dessous represente un pan de toiture : "
+            "**inclinaison** (0 deg = toit plat, 90 deg = mur vertical), "
+            "**azimut** (0=Nord, 90=Est, 180=Sud, 270=Ouest -- un pan plein "
+            "Sud recoit generalement le plus de soleil sur l'annee), et "
+            "**largeur/hauteur** qui determinent combien de panneaux "
+            "tiennent physiquement dessus. Modifie librement ces valeurs, "
+            "supprime les pans qui ne conviennent pas avec la croix, ou "
+            "ajoute-en manuellement -- le nombre de panneaux a installer se "
+            "regle juste apres, une fois les pans corrects."
         )
 
-    defaults_roof = []
-    if cfg:
-        for key_name in ("southwest", "northeast"):
-            r = cfg.get("roof", {}).get(key_name, {})
-            area = r.get("area", 20)
-            side = round(math.sqrt(max(area, 1.0)), 1)
-            defaults_roof.append((r.get("tilt", 15), r.get("azimuth", 180), side, side))
-    while len(defaults_roof) < 4:
-        defaults_roof.append((15, 180, 4.5, 4.5))
+    if "_pans" not in st.session_state:
+        default_pans = []
+        if cfg:
+            for key_name in ("southwest", "northeast"):
+                r = cfg.get("roof", {}).get(key_name, {})
+                area = r.get("area", 20)
+                side = round(math.sqrt(max(area, 1.0)), 1)
+                default_pans.append(new_pan(
+                    tilt=r.get("tilt", 15), azimuth=r.get("azimuth", 180),
+                    width=side, height=side,
+                ))
+        if not default_pans:
+            default_pans = [new_pan()]
+        st.session_state["_pans"] = default_pans
 
-    current_n_sections = int(st.session_state.get("n_sections", 2))
-    st.caption(
-        "Recapitulatif des pans connus (detection automatique ou saisie "
-        "manuelle), numerotes par surface decroissante. Reduire le nombre de "
-        "pans ci-dessous **masque d'abord les derniers de la liste** (les plus "
-        "petits) -- regarde ici lequel avant de reduire :"
-    )
-    recap_cols = st.columns(4)
-    for i in range(4):
-        t = st.session_state.get(f"tilt_{i}", defaults_roof[i][0])
-        a = st.session_state.get(f"az_{i}", defaults_roof[i][1])
-        with recap_cols[i]:
-            if i < current_n_sections:
-                st.markdown(f"**Pan {i + 1}** utilise")
-            else:
-                st.markdown(f"Pan {i + 1} -- masque")
-            st.caption(f"{t} deg d'inclinaison, azimut {a} deg ({compass_direction(a)})")
+    pan_to_delete = None
+    pans = st.session_state["_pans"]
+    cols_per_row = 3
+    for row_start in range(0, len(pans), cols_per_row):
+        row_pans = pans[row_start: row_start + cols_per_row]
+        row_cols = st.columns(cols_per_row)
+        for col, pan in zip(row_cols, row_pans):
+            uid = pan["uid"]
+            idx = pans.index(pan)
+            with col:
+                with st.container(border=True):
+                    head_l, head_r = st.columns([5, 1])
+                    head_l.markdown(f"**Pan {idx + 1}**")
+                    if head_r.button("✕", key=f"del_pan_{uid}", help="Supprimer ce pan"):
+                        pan_to_delete = uid
+                    pan["tilt"] = st.number_input(
+                        "Inclinaison (deg)", min_value=0, max_value=90,
+                        value=int(pan["tilt"]), key=f"pan_tilt_{uid}",
+                    )
+                    pan["azimuth"] = st.number_input(
+                        "Azimut (deg)", min_value=0, max_value=360,
+                        value=int(pan["azimuth"]), key=f"pan_az_{uid}",
+                        help="0=Nord, 90=Est, 180=Sud, 270=Ouest",
+                    )
+                    st.caption(f"-> oriente **{compass_direction(pan['azimuth'])}**")
+                    wc1, wc2 = st.columns(2)
+                    pan["width"] = wc1.number_input(
+                        "Largeur (m)", min_value=0.5, max_value=30.0,
+                        value=float(pan["width"]), step=0.1, key=f"pan_w_{uid}",
+                    )
+                    pan["height"] = wc2.number_input(
+                        "Hauteur (m)", min_value=0.5, max_value=30.0,
+                        value=float(pan["height"]), step=0.1, key=f"pan_h_{uid}",
+                    )
+                    pan["orientation"] = st.radio(
+                        "Panneaux", ["Portrait", "Paysage"],
+                        index=0 if pan["orientation"] == "Portrait" else 1,
+                        horizontal=True, key=f"pan_orient_{uid}",
+                    )
+                    cols_count, rows_count = panel_grid_dims(
+                        pan["width"], pan["height"], panel_width, panel_height, pan["orientation"]
+                    )
+                    pan["max_slots"] = cols_count * rows_count
+                    if pan["max_slots"] == 0:
+                        st.warning("Aucun panneau ne tient sur ce pan avec ces dimensions.")
+                    else:
+                        st.caption(f"{pan['max_slots']} panneaux max ({cols_count}x{rows_count}).")
 
-    n_sections = st.number_input(
-        "Nombre de pans de toiture exploites",
-        min_value=1, max_value=4, value=2, step=1,
-        key="n_sections",
-        help="Les pans sont numerotes par surface decroissante (voir le "
-             "recapitulatif ci-dessus). Reduire ce nombre masque les derniers "
-             "de la liste, sans effacer leurs donnees (ils reviennent si tu "
-             "remontes le nombre).",
-    )
+    if pan_to_delete is not None:
+        st.session_state["_pans"] = [p for p in pans if p["uid"] != pan_to_delete]
+        st.rerun()
 
-    section_geoms = []
-    for i in range(int(n_sections)):
-        st.markdown(f"**Pan {i + 1} -- geometrie**")
-        gc1, gc2, gc3, gc4 = st.columns(4)
-        tilt = gc1.number_input(
-            "Inclinaison (deg)", min_value=0, max_value=90,
-            value=int(defaults_roof[i][0]), key=f"tilt_{i}",
-        )
-        azimuth = gc2.number_input(
-            "Azimut (deg)", min_value=0, max_value=360,
-            value=int(defaults_roof[i][1]), key=f"az_{i}",
-            help="0=Nord, 90=Est, 180=Sud, 270=Ouest",
-        )
-        gc2.caption(f"-> oriente **{compass_direction(azimuth)}**")
-        width_m = gc3.number_input(
-            "Largeur du pan (m)", min_value=0.5, max_value=30.0,
-            value=float(defaults_roof[i][2]), step=0.1, key=f"width_{i}",
-        )
-        height_m = gc4.number_input(
-            "Hauteur du pan (m)", min_value=0.5, max_value=30.0,
-            value=float(defaults_roof[i][3]), step=0.1, key=f"height_{i}",
-        )
-        orientation = st.radio(
-            "Orientation des panneaux sur ce pan",
-            ["Portrait", "Paysage"], index=0, horizontal=True, key=f"orient_{i}",
-        )
-        cols_count, rows_count = panel_grid_dims(
-            width_m, height_m, panel_width, panel_height, orientation
-        )
-        max_slots = cols_count * rows_count
-        section_geoms.append({
-            "tilt": tilt, "azimuth": azimuth, "max_slots": max_slots,
-        })
-        if max_slots == 0:
-            st.warning(
-                "Aucun panneau ne tient sur ce pan avec ces dimensions -- "
-                "augmente la largeur/hauteur ou reduis la taille du panneau."
-            )
-        else:
-            st.caption(f"Jusqu'a {max_slots} panneaux possibles sur ce pan ({cols_count}x{rows_count}).")
-        st.divider()
+    if st.button("+ Ajouter un pan"):
+        st.session_state["_pans"].append(new_pan())
+        st.rerun()
 
-    total_slots = [g["max_slots"] for g in section_geoms]
+    total_slots = [p.get("max_slots", 0) for p in st.session_state["_pans"]]
 
     st.markdown("**Combien de panneaux veux-tu installer au total ?**")
     dc1, dc2 = st.columns([2, 1])
@@ -592,26 +598,28 @@ if not is_existing_mode:
     )
     if dc2.button("Repartir automatiquement sur les pans", use_container_width=True):
         alloc = auto_distribute(desired_total_panels, total_slots)
-        for i, n in enumerate(alloc):
-            st.session_state[f"panels_{i}"] = n
+        for pan, n in zip(st.session_state["_pans"], alloc):
+            st.session_state[f"panels_{pan['uid']}"] = n
 
     st.markdown("**Ajuste le nombre de panneaux pan par pan :**")
 
     roof_sections = []
-    for i, geom in enumerate(section_geoms):
-        if geom["max_slots"] == 0:
+    for i, pan in enumerate(st.session_state["_pans"]):
+        uid = pan["uid"]
+        slots = pan.get("max_slots", 0)
+        if slots == 0:
             n_panels = 0
             st.caption(f"Pan {i + 1} : 0 panneau (aucune place disponible).")
         else:
-            default_n = st.session_state.get(f"panels_{i}", geom["max_slots"])
+            default_n = st.session_state.get(f"panels_{uid}", slots)
             n_panels = st.slider(
                 f"Pan {i + 1} -- nombre de panneaux",
-                min_value=0, max_value=geom["max_slots"],
-                value=min(default_n, geom["max_slots"]),
-                key=f"panels_{i}",
+                min_value=0, max_value=slots,
+                value=min(default_n, slots),
+                key=f"panels_{uid}",
             )
         roof_sections.append({
-            "tilt": geom["tilt"], "azimuth": geom["azimuth"], "n_panels": n_panels,
+            "tilt": pan["tilt"], "azimuth": pan["azimuth"], "n_panels": n_panels,
         })
 
     total_panels_selected = sum(s["n_panels"] for s in roof_sections)
@@ -624,7 +632,7 @@ if not is_existing_mode:
 else:
     st.info(
         "Mode \"installation existante\" : les sections detection du toit / "
-        "modules PV / repartition des panneaux sont masquees -- tu entreras "
+        "modules PV / pans de toiture sont masquees -- tu entreras "
         "directement tes chiffres reels de production/consommation plus bas."
     )
 
