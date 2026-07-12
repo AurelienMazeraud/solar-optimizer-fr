@@ -24,16 +24,40 @@ python main.py
 
 ## Interface web (Streamlit)
 
-`app.py` propose un parcours pédagogique (chaque section a son encadré
-"ℹ️ Pourquoi ces informations ?") : choix du profil, localisation, modules PV,
-répartition des panneaux sur la toiture, consommation du foyer, batterie
+`app.py` est organisée autour de la communauté Ivry Soleil Partagé : un
+en-tête affiche deux "piles" (jauges) avec la production annuelle et la
+consommation échangée via l'autoconsommation collective (ACC) de la
+communauté, puis trois onglets séparent les usages : **Producteur**
+(simuler ou décrire une installation photovoltaïque — le contenu détaillé
+ci-dessous), **Consommateur** (estimer ses économies à partir de sa
+facture EDF), et **Administration** (réservé à l'association, pour valider
+les soumissions avant qu'elles comptent dans les totaux de la communauté).
+
+### En-tête : les piles de la communauté
+
+Les deux jauges ("Production annuelle" et "Consommation échangée via
+l'ACC") affichent les totaux **approuvés uniquement** (voir onglet
+Administration), avec un pourcentage de remplissage par rapport à un
+objectif annuel réglable par l'association. Version annuelle uniquement
+pour l'instant ; une vue plus détaillée (mensuelle, par membre...) est
+prévue dans une prochaine itération.
+
+### Onglet Producteur
+
+Le contenu de cet onglet reprend le simulateur solaire complet (chaque
+section a son encadré "ℹ️ Pourquoi ces informations ?") : choix du profil,
+localisation, modules PV, pans de toiture, consommation du foyer, batterie
 optionnelle, financement, tarifs — puis affiche les résultats (production,
 autoconsommation, temps de retour, VAN) avec des graphiques interactifs. La
 batterie est simulée heure par heure (charge sur le surplus, décharge sur
 le manque, rendement aller-retour) et augmente mécaniquement le taux
-d'autoconsommation.
+d'autoconsommation. Une fois les résultats calculés, un expander "📤
+Contribuer à la pile de production de la communauté" permet de soumettre
+sa production annuelle (nom, email, consentement) — la soumission reste en
+attente de validation par un-e administrateur-ice avant de compter dans la
+pile affichée en en-tête.
 
-### Deux profils
+#### Deux profils
 
 En haut de page, un sélecteur "Quel est ton profil ?" propose deux
 parcours :
@@ -107,16 +131,60 @@ curseur par pan (0 jusqu'à la capacité maximale calculée). Le nombre de
 panneaux réellement réglé sur chaque curseur (pas une estimation de
 surface) est ce qui alimente le calcul de production.
 
-Pour ne jamais committer la clé par erreur :
+### Onglet Consommateur
+
+Permet à un-e non-producteur-ice d'estimer ses économies potentielles en
+rejoignant l'autoconsommation collective. On y dépose sa facture EDF (PDF,
+JPG ou PNG) ; le bouton "Analyser la facture" envoie le document à l'API
+Claude d'Anthropic (modèle Sonnet), qui en extrait automatiquement adresse,
+point de livraison (PDL), titulaire, consommation annuelle, prix moyen du
+kWh, etc. (voir `src/invoice_extraction.py`). Ces valeurs sont ensuite
+affichées dans un formulaire éditable — à vérifier/corriger avant de
+continuer, l'IA pouvant se tromper. Le calcul d'économies applique un taux
+de couverture ACC et un prix ACC réglables (par défaut 30 % et 0,20 €/kWh)
+faute de clé de répartition réelle pour l'instant — à affiner une fois la
+convention de l'association et les données d'allocation réelles connues.
+Un expander "📤 Contribuer à la pile de consommation de la communauté"
+permet ensuite de soumettre ces données (en attente de validation).
+
+Important : la facture n'est envoyée qu'à l'API Anthropic pour cette
+analyse ponctuelle (elle n'est pas stockée par Ivry Soleil Partagé) ; seuls
+les champs extraits, vérifiés par l'utilisateur-ice puis explicitement
+soumis, sont conservés localement.
+
+### Onglet Administration
+
+Réservé à l'association : protégé par un mot de passe (`ADMIN_PASSWORD`,
+voir configuration des clés ci-dessous — l'onglet reste inaccessible tant
+qu'il n'est pas défini). Permet de régler les objectifs annuels des deux
+piles, de consulter les soumissions producteur/consommateur en attente
+(avec boutons Approuver/Rejeter), et de voir l'historique complet des
+soumissions déjà traitées. Seules les soumissions **approuvées** comptent
+dans les totaux affichés en en-tête (voir `src/community_db.py`).
+
+### Configuration des clés et mots de passe
+
+Trois secrets optionnels, à définir dans `.streamlit/secrets.toml` (jamais
+dans le dépôt) :
+
+```
+GOOGLE_SOLAR_API_KEY = "..."   # detection automatique du toit (onglet Producteur)
+ANTHROPIC_API_KEY = "..."      # extraction de facture (onglet Consommateur)
+ADMIN_PASSWORD = "..."         # acces a l'onglet Administration
+```
 
 ```
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 ```
 
-puis remplacer la valeur par la vraie clé dans ce fichier local
+puis remplacer les valeurs par les vraies clés dans ce fichier local
 (`.streamlit/secrets.toml` est déjà exclu par `.gitignore`). Sur Streamlit
-Community Cloud, la clé se configure plutôt dans les "Secrets" de l'app,
-depuis le tableau de bord — jamais dans le dépôt.
+Community Cloud, ces valeurs se configurent plutôt dans les "Secrets" de
+l'app, depuis le tableau de bord — jamais dans le dépôt. Sans clé
+configurée, chaque fonctionnalité correspondante affiche un champ de test
+local (à ne jamais utiliser sur une app publique, la valeur saisie restant
+visible/inspectable par les visiteurs) ou reste inaccessible (cas du mot
+de passe administrateur).
 
 ### Formulaire de contact (Ivry Soleil Partagé)
 
@@ -148,6 +216,14 @@ Fonctionnement technique :
   légal exact du responsable de traitement, éventuelles obligations
   déclaratives selon l'ampleur de la collecte) — le texte fourni est un
   point de départ, pas un avis juridique.
+
+Les soumissions de production/consommation (onglets Producteur/Consommateur,
+section "📤 Contribuer à la pile...") suivent la même logique de stockage
+local, mais dans une base séparée : `data/community.db` (voir
+`src/community_db.py`), elle aussi exclue du dépôt par `.gitignore`. Chaque
+soumission reste au statut "en attente" jusqu'à validation explicite par
+un-e administrateur-ice dans l'onglet Administration ; seules les
+soumissions approuvées comptent dans les totaux affichés en en-tête.
 
 ### Intégrer l'app dans une page internet
 
@@ -190,3 +266,20 @@ Quelques options, du plus simple au plus autonome :
 - La base de contacts locale (`data/contacts.db`) n'est pas fiable sur un
   hébergement à disque éphémère (voir "Formulaire de contact" ci-dessus) :
   prévoir un auto-hébergement pour une conservation réelle dans la durée.
+- Le calcul d'économies de l'onglet Consommateur repose sur un taux de
+  couverture ACC et un prix ACC **saisis manuellement** (par défaut 30 % et
+  0,20 €/kWh) : il n'existe pas encore de vraie clé de répartition de
+  l'énergie partagée entre les membres de la communauté. La "pile"
+  d'énergie échangée via l'ACC en en-tête additionne, pour l'instant, les
+  valeurs déclarées/estimées à chaque soumission approuvée — à remplacer
+  par un calcul réel dès que les données d'allocation (Enedis, PMO...)
+  seront disponibles.
+- L'extraction de facture via l'API Anthropic peut se tromper (mise en
+  page inhabituelle, facture de mauvaise qualité/scan...) : les champs
+  extraits sont affichés dans un formulaire éditable à vérifier avant
+  toute soumission, jamais enregistrés tels quels sans relecture.
+- Le mot de passe administrateur protège l'onglet Administration au niveau
+  de l'application (comparaison côté serveur), mais reste un mécanisme
+  simple : suffisant pour une petite association, pas un contrôle d'accès
+  de niveau production. Ne pas y stocker de secret plus sensible que la
+  validation de soumissions.
