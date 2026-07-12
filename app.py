@@ -170,24 +170,7 @@ def new_pan(tilt=30, azimuth=180, width=4.0, height=4.0, orientation="Portrait")
 
 cfg = load_defaults()
 
-st.title("☀️ Calculateur d'efficacite de panneau solaire")
-st.caption(
-    "Simulation de production photovoltaique, autoconsommation, batterie et "
-    "retour sur investissement, pour evaluer sa propre situation avant de "
-    "rejoindre ou constituer une communaute d'autoconsommation collective."
-)
-
-with st.expander("Comment fonctionne ce simulateur ?"):
-    st.markdown(
-        "Trois espaces : **Producteur** (simuler ou decrire une installation "
-        "photovoltaique), **Consommateur** (estimer ses economies en "
-        "rejoignant l'autoconsommation collective, a partir de sa facture "
-        "EDF), et **Administration** (reserve a l'association, pour valider "
-        "les donnees avant qu'elles comptent dans les totaux de la "
-        "communaute affiches ci-dessous). Chaque section a son propre "
-        "encadre d'explication -- pas besoin de connaissances techniques en "
-        "amont."
-    )
+st.title("☀️ Ivry Soleil Partage")
 
 st.divider()
 st.subheader("\U0001F50B Ivry Soleil Partage -- la communaute en un coup d'oeil")
@@ -204,6 +187,24 @@ with pile_col1:
 with pile_col2:
     render_pile("Consommation echangee via l'ACC", approved_acc_kwh, consumption_target_kwh)
 st.divider()
+
+st.markdown(
+    """
+    <style>
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab-list"] button {
+        padding: 16px 28px !important;
+    }
+    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+        font-size: 1.35rem !important;
+        font-weight: 700 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 tab_producteur, tab_consommateur, tab_admin = st.tabs([
     "\U0001F506 Producteur", "\U0001F50C Consommateur", "\U0001F510 Administration",
@@ -385,28 +386,6 @@ with tab_producteur:
     if not is_existing_mode:
 
         with st.expander("\U0001F50E Reperage automatique du toit (Google Solar API, optionnel)", expanded=True):
-            st.caption(
-                "Des qu'une position est choisie ci-dessus (adresse ou clic sur la "
-                "carte), l'inclinaison, l'azimut et la surface de chaque pan de "
-                "toiture sont recuperes automatiquement. Chaque pan est represente "
-                "sur la carte par un point colore et une fleche pointant dans le "
-                "sens reel de l'azimut, et sous forme de carte editable dans la "
-                "section \"Pans de toiture\" ci-dessous. 10 000 requetes gratuites "
-                "par mois chez Google -- largement suffisant pour un usage ponctuel."
-            )
-            st.info(
-                "Limite importante : Google Solar API ne fournit ni la forme exacte "
-                "de chaque pan de toiture, ni son orientation dans l'espace -- "
-                "seulement un point central, une surface, une inclinaison et un "
-                "azimut. Il est donc normal que la position exacte du batiment sur "
-                "la carte et le point/fleche de chaque pan restent approximatifs, "
-                "notamment sur les toits plats, complexes ou de petite taille. Les "
-                "valeurs restent a comparer a la vue satellite et a corriger "
-                "directement sur les cartes \"Pans de toiture\" ci-dessous -- ce "
-                "sont bien ces cartes, pas la carte geographique, qui alimentent "
-                "le calcul.",
-                icon="ℹ️",
-            )
 
             server_key = ""
             try:
@@ -485,21 +464,12 @@ with tab_producteur:
             if st.session_state.get("_roof_fetch_error"):
                 st.error(st.session_state["_roof_fetch_error"])
             elif st.session_state.get("_roof_fetch_summary"):
-                summary = st.session_state["_roof_fetch_summary"]
-                st.success(
-                    f"{summary['n_found']} pan(s) de toiture detecte(s), affiches sur la "
-                    "carte ci-dessus (point + fleche d'orientation) et pre-remplis "
-                    "sous forme de cartes ci-dessous -- a ajuster si besoin)."
+                st.info(
+                    "Merci de bien verifier ces informations avant de valider la "
+                    "simulation de pose de panneaux solaire. A noter que la totalite "
+                    "du toit n'est pas toujours equipable, une visite technique par "
+                    "un professionnel agree permettra de valider ces informations."
                 )
-                if summary["max_panels"]:
-                    ref = f" (panneau de reference Google : {', '.join(summary['ref_bits'])})" if summary["ref_bits"] else ""
-                    st.info(
-                        f"Estimation Google : jusqu'a **{summary['max_panels']} panneaux** "
-                        f"installables sur ce toit{ref}. Si tes panneaux ont des "
-                        "dimensions differentes (voir section ci-dessous), le nombre "
-                        "reel peut varier -- le calcul de production utilise bien tes "
-                        "propres dimensions, pas celles de Google."
-                    )
             elif not api_key:
                 st.caption(
                     "Renseigne une cle (ci-dessus, ou dans secrets.toml) pour activer "
