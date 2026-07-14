@@ -645,7 +645,7 @@ with tab_producteur:
             else:
                 default_n = st.session_state.get(f"panels_{uid}", slots)
                 n_panels = st.slider(
-                    f"Pan {i + 1} -- nombre de panneaux",
+                    f"Pan {i + 1} -- nombre de panneaux (jusqu'a {slots} possibles)",
                     min_value=0, max_value=slots,
                     value=min(default_n, slots),
                     key=f"panels_{uid}",
