@@ -215,6 +215,15 @@ tab_producteur, tab_consommateur, tab_admin = st.tabs([
     "\U0001F506 Producteur", "\U0001F50C Consommateur", "\U0001F510 Administration",
 ])
 
+# Rempli par les onglets Producteur/Consommateur quand une simulation ou une
+# facture verifiee est disponible, et conserve en session_state (pas une
+# simple variable locale) car le formulaire de contact plus bas est soumis
+# via un rerun distinct, ou "submitted" (bouton de simulation) redevient
+# False -- sans session_state la contribution disparaitrait avant meme
+# d'atteindre le formulaire "Rejoindre Ivry Soleil Partage".
+producer_contribution = st.session_state.get("_producer_contribution")
+consumer_contribution = st.session_state.get("_consumer_contribution")
+
 with tab_producteur:
 
     st.subheader("Quel est ton profil ?")
@@ -304,7 +313,8 @@ with tab_producteur:
                 current_lat, current_lon = selected_point
 
     location_map = folium.Map(
-        location=[current_lat, current_lon], zoom_start=20, max_zoom=22, tiles=None,
+        location=[current_lat, current_lon], zoom_start=17, max_zoom=22, tiles=None,
+        control_scale=True,
     )
 
     # Curseur personnalise : un point rouge (meme couleur que le marqueur de
@@ -330,6 +340,13 @@ with tab_producteur:
         radius=9, color=MARKER_RED, weight=2,
         fill=True, fill_color=MARKER_RED, fill_opacity=0.85,
         tooltip="Position actuelle -- clique ailleurs pour la deplacer",
+    ).add_to(location_map)
+
+    folium.Circle(
+        location=[current_lat, current_lon],
+        radius=750, color="#2e7d32", weight=2, dash_array="6",
+        fill=False, opacity=0.7,
+        tooltip="Rayon de 750 m autour de la position actuelle",
     ).add_to(location_map)
 
     roof_overlay = st.session_state.get("_roof_overlay")
@@ -651,6 +668,84 @@ with tab_producteur:
             "directement tes chiffres reels de production/consommation plus bas."
         )
 
+    if not is_existing_mode:
+        with st.expander("\U0001F4E4 Remplir automatiquement via une facture EDF (optionnel)"):
+            st.caption(
+                "Envoie ta facture EDF (PDF ou photo) : une IA (Claude, "
+                "Anthropic) en extrait la consommation annuelle et tes "
+                "coordonnees (nom, adresse), pour pre-remplir la consommation "
+                "du foyer ci-dessous ainsi que le formulaire de contact tout "
+                "en bas de la page. Rien n'est conserve par Ivry Soleil "
+                "Partage au-dela de cette analyse ponctuelle."
+            )
+
+            server_anthropic_key_p = ""
+            try:
+                server_anthropic_key_p = st.secrets.get("ANTHROPIC_API_KEY", "")
+            except Exception:
+                server_anthropic_key_p = ""
+
+            if server_anthropic_key_p:
+                anthropic_api_key_p = server_anthropic_key_p
+            else:
+                st.warning(
+                    "Aucune cle configuree cote serveur. Le champ ci-dessous est "
+                    "uniquement pour un test local : ne l'utilise jamais sur une "
+                    "app publique.",
+                    icon="⚠️",
+                )
+                anthropic_api_key_p = st.text_input(
+                    "Cle API Anthropic (test local uniquement)", value="",
+                    type="password", key="_anthropic_key_producteur",
+                    help="Stocke plutot la cle dans `.streamlit/secrets.toml` "
+                         "(ANTHROPIC_API_KEY = \"...\") pour un usage durable/deploye.",
+                )
+
+            invoice_file_p = st.file_uploader(
+                "Facture EDF (PDF, JPG ou PNG)", type=["pdf", "png", "jpg", "jpeg"],
+                key="_invoice_file_producteur",
+            )
+
+            if st.button(
+                "Analyser la facture",
+                disabled=not (invoice_file_p and anthropic_api_key_p),
+                key="_analyze_invoice_producteur",
+            ):
+                with st.spinner("Analyse de la facture en cours..."):
+                    try:
+                        extracted_p = extract_invoice_data(
+                            invoice_file_p.getvalue(), invoice_file_p.name,
+                            anthropic_api_key_p,
+                        )
+                    except InvoiceExtractionError as exc:
+                        st.session_state["_invoice_error_producteur"] = str(exc)
+                    else:
+                        st.session_state["_invoice_error_producteur"] = None
+
+                        conso = extracted_p.get("consommation_annuelle_kwh")
+                        if conso:
+                            st.session_state["annual_target_foyer"] = int(conso)
+
+                        full_name = (extracted_p.get("titulaire_nom") or "").strip()
+                        if full_name:
+                            parts = full_name.split(None, 1)
+                            st.session_state["contact_first_name"] = parts[0]
+                            st.session_state["contact_last_name"] = parts[1] if len(parts) > 1 else ""
+
+                        adresse_facture = extracted_p.get("adresse")
+                        if adresse_facture:
+                            st.session_state["contact_address"] = adresse_facture
+
+                        st.success(
+                            "Facture analysee -- la consommation annuelle "
+                            "ci-dessous et tes coordonnees (formulaire de "
+                            "contact tout en bas) ont ete pre-remplies : "
+                            "verifie-les avant de calculer/envoyer."
+                        )
+
+            if st.session_state.get("_invoice_error_producteur"):
+                st.error(st.session_state["_invoice_error_producteur"])
+
     # ------------------------------------------------------------------
     # Le reste (consommation ou donnees reelles, batterie, financement,
     # tarifs) n'a pas besoin de reactivite immediate : ca reste dans un
@@ -688,8 +783,11 @@ with tab_producteur:
             annual_target = st.number_input(
                 "Consommation annuelle connue (kWh) -- laisser a 0 pour garder le profil "
                 "modelise tel quel, sinon le profil est recale sur cette valeur "
-                "(ex: releve de compteur Linky)",
-                min_value=0, max_value=50000, value=0, step=100,
+                "(ex: releve de compteur Linky, ou pre-rempli depuis une facture "
+                "ci-dessus)",
+                min_value=0, max_value=50000,
+                value=st.session_state.get("annual_target_foyer", 0), step=100,
+                key="annual_target_foyer",
             )
         else:
             st.subheader("\U0001F4CA Vos donnees reelles (installation existante)")
@@ -841,10 +939,23 @@ with tab_producteur:
             price_export = acc_price_gross
             turpe_reduced = acc_turpe_reduced
             pmo_fee_pct = acc_pmo_fee_pct
-            st.caption(
-                f"Tarif fixe par Ivry Soleil Partage : {price_export:.4f} euros/kWh brut, "
-                f"dont {turpe_reduced:.4f} euros/kWh de TURPE reduit ACC -- non "
-                "modifiable ici (voir onglet Administration)."
+            net_export_preview = max(price_export - turpe_reduced, 0.0)
+            st.markdown(
+                f"""
+                <div style="background-color:#eaf7ec; border-left:6px solid #2e7d32;
+                            border-radius:6px; padding:14px 18px; margin:10px 0 4px 0;">
+                    <div style="font-size:1.15rem; font-weight:700; color:#1b5e20;">
+                        Tarif fixe par Ivry Soleil Partage : {price_export:.4f} euros/kWh brut,
+                        dont {turpe_reduced:.4f} euros/kWh de TURPE reduit ACC -- non
+                        modifiable ici (voir onglet Administration).
+                    </div>
+                    <div style="font-size:1.15rem; font-weight:700; color:#1b5e20; margin-top:6px;">
+                        Prix net effectif apres TURPE : {net_export_preview:.4f} euros/kWh
+                        (au lieu de {price_export:.4f} euros/kWh brut).
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
         else:
             price_export = Investment.EXPORT_PRESETS[export_mode]
@@ -852,7 +963,7 @@ with tab_producteur:
             pmo_fee_pct = 0.0
             st.caption(f"Tarif retenu : {price_export:.4f} euros/kWh (valeur indicative).")
 
-        if turpe_reduced > 0 or pmo_fee_pct > 0:
+        if not is_acc_mode and (turpe_reduced > 0 or pmo_fee_pct > 0):
             net_export_preview = max(price_export * (1 - pmo_fee_pct) - turpe_reduced, 0.0)
             st.caption(
                 f"Prix net effectif apres TURPE/PMO : {net_export_preview:.4f} euros/kWh "
@@ -1084,49 +1195,18 @@ with tab_producteur:
                     cf_display[_col] = cf_display[_col].round(0)
             st.dataframe(cf_display, width="stretch")
 
-        st.divider()
-        with st.expander("\U0001F4E4 Contribuer a la pile de production de la communaute"):
-            st.caption(
-                "Ta production annuelle simulee ci-dessus peut etre ajoutee au "
-                "total affiche en haut de page, apres validation par un-e "
-                "administrateur-ice de Ivry Soleil Partage (voir mentions RGPD "
-                "dans la section contact plus bas)."
-            )
-            with st.form("submit_producer_form", clear_on_submit=True):
-                pc1, pc2 = st.columns(2)
-                prod_name = pc1.text_input("Nom / prenom (ou raison sociale)")
-                prod_email = pc2.text_input("Email")
-                prod_phone = st.text_input("Telephone (optionnel)")
-                st.caption(f"Production annuelle qui sera soumise : {annual_production:.0f} kWh")
-                prod_consent = st.checkbox(
-                    "J'accepte que ces donnees soient stockees localement par Ivry "
-                    "Soleil Partage et comptabilisees dans le total de la "
-                    "communaute apres validation par un-e administrateur-ice "
-                    "(obligatoire)."
-                )
-                prod_submit = st.form_submit_button("Soumettre a la communaute")
-            if prod_submit:
-                if not prod_consent or not prod_name.strip() or not prod_email.strip():
-                    st.error(
-                        "Renseigne au moins un nom et un email, et coche la case "
-                        "de consentement."
-                    )
-                else:
-                    try:
-                        submit_producer(
-                            prod_name, prod_email, prod_phone,
-                            st.session_state.get("_selected_address_label", ""),
-                            lat, lon, float(annual_production),
-                            installed_kw_total if installed_kw_total else None,
-                        )
-                    except Exception as exc:
-                        st.error(f"Erreur lors de la soumission : {exc}")
-                    else:
-                        st.success(
-                            "Merci ! Ta production a ete soumise et sera "
-                            "comptabilisee dans le total de la communaute apres "
-                            "validation."
-                        )
+        producer_contribution = {
+            "annual_production_kwh": float(annual_production),
+            "installed_kw": installed_kw_total if installed_kw_total else None,
+            "address": st.session_state.get("_selected_address_label", ""),
+            "lat": lat, "lon": lon,
+        }
+        st.session_state["_producer_contribution"] = producer_contribution
+        st.caption(
+            "Ta production annuelle simulee ci-dessus peut etre ajoutee au "
+            "total affiche en haut de page -- rejoins Ivry Soleil Partage "
+            "tout en bas de la page pour la soumettre."
+        )
 
     else:
         st.info("Renseigne tes informations ci-dessus puis clique sur *Calculer*.")
@@ -1266,48 +1346,19 @@ with tab_consommateur:
         k2.metric("Energie couverte par l'ACC", f"{energie_acc_kwh:.0f} kWh")
         k3.metric("Economie annuelle estimee", f"{economie_eur:.0f} euros")
 
-        st.divider()
-        with st.expander("\U0001F4E4 Contribuer a la pile de consommation de la communaute"):
-            st.caption(
-                "Tes donnees peuvent etre ajoutees au total affiche en haut de "
-                "page, apres validation par un-e administrateur-ice de Ivry "
-                "Soleil Partage."
-            )
-            with st.form("submit_consumer_form", clear_on_submit=True):
-                cc1, cc2 = st.columns(2)
-                cons_name = cc1.text_input("Nom / prenom (ou raison sociale)", value=reviewed["identity"])
-                cons_email = cc2.text_input("Email")
-                cons_phone = st.text_input("Telephone (optionnel)")
-                cons_consent = st.checkbox(
-                    "J'accepte que ces donnees (issues de ma facture, verifiees "
-                    "par mes soins) soient stockees localement par Ivry Soleil "
-                    "Partage et comptabilisees dans le total de la communaute "
-                    "apres validation par un-e administrateur-ice (obligatoire)."
-                )
-                cons_submit = st.form_submit_button("Soumettre a la communaute")
-            if cons_submit:
-                if not cons_consent or not cons_name.strip() or not cons_email.strip():
-                    st.error(
-                        "Renseigne au moins un nom et un email, et coche la case "
-                        "de consentement."
-                    )
-                else:
-                    try:
-                        submit_consumer(
-                            cons_name, cons_email, cons_phone, reviewed["address"],
-                            reviewed["pdl"], reviewed["identity"],
-                            float(reviewed["consumption"]), annual_acc_kwh=float(energie_acc_kwh),
-                            estimated_savings_eur=float(economie_eur),
-                            invoice_extract=extracted,
-                        )
-                    except Exception as exc:
-                        st.error(f"Erreur lors de la soumission : {exc}")
-                    else:
-                        st.success(
-                            "Merci ! Tes donnees ont ete soumises et seront "
-                            "comptabilisees dans le total de la communaute apres "
-                            "validation."
-                        )
+        consumer_contribution = {
+            "identity": reviewed["identity"], "address": reviewed["address"],
+            "pdl": reviewed["pdl"], "annual_consumption_kwh": float(reviewed["consumption"]),
+            "annual_acc_kwh": float(energie_acc_kwh),
+            "estimated_savings_eur": float(economie_eur),
+            "invoice_extract": extracted,
+        }
+        st.session_state["_consumer_contribution"] = consumer_contribution
+        st.caption(
+            "Tes donnees peuvent etre ajoutees au total affiche en haut de "
+            "page -- rejoins Ivry Soleil Partage tout en bas de la page pour "
+            "les soumettre."
+        )
     elif invoice_file and not anthropic_api_key:
         st.info("Renseigne une cle API Anthropic (ci-dessus) pour analyser la facture.")
 
@@ -1459,9 +1510,12 @@ with tab_admin:
 st.divider()
 st.subheader("\U0001F91D Rejoindre Ivry Soleil Partage")
 st.caption(
-    "Envie d'etre tenu(e) au courant du projet de communaute d'autoconsommation "
-    "collective, ou d'y participer ? Laisse tes coordonnees ci-dessous -- "
-    "entierement facultatif, independant des simulations ci-dessus."
+    "Tu veux rejoindre Ivry Soleil Partage et contribuer a sa production et "
+    "a sa consommation ? Laisse tes coordonnees ci-dessous -- entierement "
+    "facultatif. Si tu as simule une production (onglet Producteur) ou "
+    "verifie une facture (onglet Consommateur) plus haut, tu peux aussi "
+    "cocher les cases correspondantes pour les ajouter aux totaux de la "
+    "communaute, apres validation par un-e administrateur-ice."
 )
 
 with st.expander("Mentions RGPD -- a lire avant de transmettre tes donnees"):
@@ -1492,24 +1546,59 @@ with st.expander("Mentions RGPD -- a lire avant de transmettre tes donnees"):
         "du responsable de traitement._"
     )
 
-default_contact_address = st.session_state.get("_selected_address_label", "")
+default_contact_address = st.session_state.get(
+    "contact_address", st.session_state.get("_selected_address_label", "")
+)
 
 with st.form("contact_form", clear_on_submit=True):
     cf1, cf2 = st.columns(2)
-    contact_first_name = cf1.text_input("Prenom")
-    contact_last_name = cf2.text_input("Nom")
+    contact_first_name = cf1.text_input(
+        "Prenom", value=st.session_state.get("contact_first_name", ""),
+        key="contact_first_name",
+    )
+    contact_last_name = cf2.text_input(
+        "Nom", value=st.session_state.get("contact_last_name", ""),
+        key="contact_last_name",
+    )
     cf3, cf4 = st.columns(2)
-    contact_email = cf3.text_input("Email")
-    contact_phone = cf4.text_input("Telephone")
+    contact_email = cf3.text_input(
+        "Email", value=st.session_state.get("contact_email", ""), key="contact_email",
+    )
+    contact_phone = cf4.text_input(
+        "Telephone", value=st.session_state.get("contact_phone", ""), key="contact_phone",
+    )
     contact_address = st.text_input(
         "Adresse",
         value=default_contact_address,
-        help="Pre-remplie depuis la recherche d'adresse ci-dessus -- modifiable.",
+        key="contact_address",
+        help="Pre-remplie depuis la recherche d'adresse ci-dessus, ou depuis "
+             "une facture analysee -- modifiable.",
     )
+
+    contribute_production = False
+    contribute_consumption = False
+    if producer_contribution:
+        contribute_production = st.checkbox(
+            "Ajouter ma production annuelle simulee "
+            f"({producer_contribution['annual_production_kwh']:.0f} kWh) a la "
+            "pile de production de la communaute (onglet Producteur)."
+        )
+    if consumer_contribution:
+        contribute_consumption = st.checkbox(
+            "Ajouter ma consommation verifiee "
+            f"({consumer_contribution['annual_consumption_kwh']:.0f} kWh, dont "
+            f"{consumer_contribution['annual_acc_kwh']:.0f} kWh estimes couverts "
+            "par l'ACC) a la pile de consommation de la communaute (onglet "
+            "Consommateur)."
+        )
+
     storage_consent = st.checkbox(
         "J'accepte que Ivry Soleil Partage conserve mes coordonnees (nom, "
-        "prenom, email, telephone, adresse) dans les conditions decrites "
-        "ci-dessus. (obligatoire pour envoyer le formulaire)"
+        "prenom, email, telephone, adresse), et le cas echeant les chiffres "
+        "de production/consommation coches ci-dessus, dans les conditions "
+        "decrites ci-dessus -- ces derniers ne comptant dans les totaux de "
+        "la communaute qu'apres validation par un-e administrateur-ice. "
+        "(obligatoire pour envoyer le formulaire)"
     )
     partner_sharing_consent = st.checkbox(
         "J'autorise en plus Ivry Soleil Partage a transmettre mes "
@@ -1543,7 +1632,42 @@ if contact_submitted:
         except Exception as exc:
             st.error(f"Erreur lors de l'enregistrement : {exc}")
         else:
-            st.success(
-                "Merci ! Tes coordonnees ont ete enregistrees localement. "
-                "Ivry Soleil Partage te recontactera bientot."
-            )
+            messages = ["Tes coordonnees ont ete enregistrees localement."]
+            contact_full_name = f"{contact_first_name} {contact_last_name}".strip()
+
+            if contribute_production and producer_contribution:
+                try:
+                    submit_producer(
+                        contact_full_name, contact_email, contact_phone,
+                        producer_contribution["address"] or contact_address,
+                        producer_contribution["lat"], producer_contribution["lon"],
+                        producer_contribution["annual_production_kwh"],
+                        producer_contribution["installed_kw"],
+                    )
+                except Exception as exc:
+                    st.error(f"Erreur lors de la soumission de ta production : {exc}")
+                else:
+                    messages.append(
+                        "Ta production a ete soumise a la pile de la communaute."
+                    )
+
+            if contribute_consumption and consumer_contribution:
+                try:
+                    submit_consumer(
+                        contact_full_name, contact_email, contact_phone,
+                        consumer_contribution["address"] or contact_address,
+                        consumer_contribution["pdl"], consumer_contribution["identity"],
+                        consumer_contribution["annual_consumption_kwh"],
+                        annual_acc_kwh=consumer_contribution["annual_acc_kwh"],
+                        estimated_savings_eur=consumer_contribution["estimated_savings_eur"],
+                        invoice_extract=consumer_contribution["invoice_extract"],
+                    )
+                except Exception as exc:
+                    st.error(f"Erreur lors de la soumission de ta consommation : {exc}")
+                else:
+                    messages.append(
+                        "Ta consommation a ete soumise a la pile de la communaute."
+                    )
+
+            messages.append("Ivry Soleil Partage te recontactera bientot.")
+            st.success("Merci ! " + " ".join(messages))
