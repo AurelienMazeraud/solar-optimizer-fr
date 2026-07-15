@@ -1,4 +1,5 @@
 import base64
+import datetime as dt
 import math
 import re
 
@@ -21,11 +22,14 @@ from src.community_db import (
     set_producer_status, set_consumer_status, get_approved_totals,
     get_targets, set_targets, get_acc_tariff_settings, set_acc_tariff_settings,
     update_producer, delete_producer, update_consumer, delete_consumer,
+    compute_billing_period, get_billing_period_detail, list_billing_periods,
+    set_consumer_line_paid, set_producer_line_paid,
     STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED,
 )
 from src.invoice_extraction import (
     extract_invoice_data, extract_production_data, InvoiceExtractionError,
 )
+from src.billing_pdf import generate_consumer_invoice_pdf, generate_producer_statement_pdf
 
 
 st.set_page_config(
@@ -913,16 +917,22 @@ with tab_producteur:
             c1, c2 = st.columns(2)
             annual_consumption_real = c1.number_input(
                 "Consommation annuelle du foyer (kWh)",
-                min_value=0, max_value=100000, value=6000, step=100,
+                min_value=0, max_value=100000,
+                value=st.session_state.get("annual_consumption_existing", 6000), step=100,
+                key="annual_consumption_existing",
             )
             annual_production_real = c2.number_input(
                 "Production annuelle de l'installation (kWh)",
-                min_value=0, max_value=100000, value=6000, step=100,
+                min_value=0, max_value=100000,
+                value=st.session_state.get("annual_production_existing", 6000), step=100,
+                key="annual_production_existing",
             )
             annual_export_real_input = st.number_input(
                 "Energie injectee/revendue sur le reseau (kWh/an) -- laisser a 0 si "
                 "inconnue",
-                min_value=0, max_value=100000, value=0, step=100,
+                min_value=0, max_value=100000,
+                value=st.session_state.get("annual_export_existing", 0), step=100,
+                key="annual_export_existing",
             )
 
         st.subheader("\U0001F50B Batterie (optionnel)")
@@ -1264,6 +1274,30 @@ with tab_producteur:
                 f"batterie estimee a {battery_capex:.0f} euros "
                 f"({battery_capacity:.1f} kWh x {battery_price_per_kwh:.0f} euros/kWh)."
             )
+
+        st.markdown("**Repartition du gain annuel (annee 1)**")
+        gain_autoconsommation = float(cf["Savings"].iloc[0])
+        gain_revente = float(cf["Sales"].iloc[0])
+        g1, g2 = st.columns(2)
+        g1.metric(
+            "Gain autoconsommation",
+            f"{gain_autoconsommation:.0f} euros/an",
+            help="Economie realisee car cette energie n'a pas eu besoin d'etre "
+                 "achetee au reseau (autoconsommation x tarif fournisseur).",
+        )
+        g2.metric(
+            "Gain revente du surplus",
+            f"{gain_revente:.0f} euros/an",
+            help="Revenu de l'energie exportee/revendue (Ivry Soleil Partage ou "
+                 "obligation d'achat), net des frais TURPE/PMO le cas echeant.",
+        )
+        st.caption(
+            "Ces deux gains sont complementaires : le premier vient de "
+            "l'electricite que tu n'as plus besoin d'acheter, le second de la "
+            "vente du surplus non autoconsomme. Leur somme constitue le "
+            "benefice brut annuel utilise dans le calcul du temps de retour "
+            "et de la VAN ci-dessus."
+        )
 
         if total_production is not None:
             monthly = total_production.resample("ME").sum()
@@ -1718,6 +1752,147 @@ with tab_admin:
                     if cancel_clicked:
                         st.session_state[editing_key] = False
                         st.rerun()
+
+        st.markdown("### \U0001F4B6 Facturation mensuelle (mandataire)")
+        st.caption(
+            "Ivry Soleil Partage agit comme mandataire de facturation pour le "
+            "compte des producteurs : elle facture chaque consommateur au "
+            "tarif ACC brut defini ci-dessus, preleve le TURPE reduit et sa "
+            "commission de gestion, puis redistribue le solde aux producteurs "
+            "au prorata de leur production du mois. Ce montage doit etre "
+            "valide par un-e expert-comptable/juriste avant toute facturation "
+            "reelle (mandat de facturation explicite de chaque producteur, "
+            "mentions TVA a verifier)."
+        )
+
+        today = dt.date.today()
+        bc1, bc2 = st.columns(2)
+        billing_year = bc1.selectbox(
+            "Annee", [today.year - 1, today.year, today.year + 1], index=1,
+            key="_billing_year",
+        )
+        billing_month = bc2.selectbox(
+            "Mois", list(range(1, 13)), index=today.month - 1,
+            format_func=lambda m: f"{m:02d}", key="_billing_month",
+        )
+        billing_period = f"{billing_year}-{billing_month:02d}"
+
+        approved_producers_billing = [p for p in list_producers() if p["status"] == STATUS_APPROVED]
+        approved_consumers_billing = [c for c in list_consumers() if c["status"] == STATUS_APPROVED]
+
+        existing_billing_detail = get_billing_period_detail(billing_period)
+        existing_cons_kwh = (
+            {l["consumer_submission_id"]: l["kwh_acc"] for l in existing_billing_detail["consumers"]}
+            if existing_billing_detail else {}
+        )
+        existing_prod_kwh = (
+            {l["producer_submission_id"]: l["kwh_produced"] for l in existing_billing_detail["producers"]}
+            if existing_billing_detail else {}
+        )
+
+        if not approved_producers_billing or not approved_consumers_billing:
+            st.info(
+                "Il faut au moins un producteur et un consommateur approuves "
+                "pour calculer une periode de facturation."
+            )
+        else:
+            with st.form(f"billing_form_{billing_period}"):
+                st.markdown(
+                    f"**kWh ACC consommes en {billing_period}** "
+                    "(pre-rempli : moyenne annuelle / 12, a corriger avec les "
+                    "vraies donnees du mois -- releve manuel ou, une fois "
+                    "disponible, l'API Datahub Enedis)"
+                )
+                cons_kwh_inputs = {}
+                for c in approved_consumers_billing:
+                    base_kwh = c["annual_acc_kwh"] or c["annual_consumption_kwh"] or 0.0
+                    default_kwh = existing_cons_kwh.get(c["id"], round(base_kwh / 12, 1))
+                    cons_kwh_inputs[c["id"]] = st.number_input(
+                        f"{c['name'] or '(sans nom)'} -- kWh ACC du mois",
+                        min_value=0.0, value=float(default_kwh), step=10.0,
+                        key=f"billing_cons_{billing_period}_{c['id']}",
+                    )
+
+                st.markdown(
+                    f"**kWh produits en {billing_period}** "
+                    "(pre-rempli : moyenne annuelle / 12, a corriger)"
+                )
+                prod_kwh_inputs = {}
+                for p in approved_producers_billing:
+                    default_kwh = existing_prod_kwh.get(
+                        p["id"], round((p["annual_production_kwh"] or 0.0) / 12, 1),
+                    )
+                    prod_kwh_inputs[p["id"]] = st.number_input(
+                        f"{p['name'] or '(sans nom)'} -- kWh produits du mois",
+                        min_value=0.0, value=float(default_kwh), step=10.0,
+                        key=f"billing_prod_{billing_period}_{p['id']}",
+                    )
+
+                billing_submitted = st.form_submit_button(
+                    f"Calculer la facturation de {billing_period}"
+                )
+
+            if billing_submitted:
+                try:
+                    compute_billing_period(billing_period, cons_kwh_inputs, prod_kwh_inputs)
+                except Exception as exc:
+                    st.error(f"Erreur : {exc}")
+                else:
+                    st.success(f"Facturation de {billing_period} calculee.")
+                    st.rerun()
+
+        billing_detail = get_billing_period_detail(billing_period)
+        if billing_detail:
+            total_collected = sum(l["amount_eur"] for l in billing_detail["consumers"])
+            total_paid_out = sum(l["amount_eur"] for l in billing_detail["producers"])
+            retained = max(total_collected - total_paid_out, 0.0)
+
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Facture aux consommateurs", f"{total_collected:.2f} euros")
+            s2.metric("Redistribue aux producteurs", f"{total_paid_out:.2f} euros")
+            s3.metric("TURPE + commission PMO retenus", f"{retained:.2f} euros")
+
+            st.markdown(f"**Factures consommateurs -- {billing_period}**")
+            for line in billing_detail["consumers"]:
+                lc1, lc2, lc3, lc4, lc5 = st.columns([3, 2, 2, 2, 2])
+                lc1.markdown(f"**{line['name'] or '(sans nom)'}**")
+                lc2.caption(f"{line['kwh_acc']:.1f} kWh ACC")
+                lc3.caption(f"{line['amount_eur']:.2f} euros")
+                new_paid = lc4.checkbox(
+                    "Payee", value=bool(line["paid"]), key=f"paid_cons_line_{line['id']}",
+                )
+                if new_paid != bool(line["paid"]):
+                    set_consumer_line_paid(line["id"], new_paid)
+                    st.rerun()
+                lc5.download_button(
+                    "PDF", data=generate_consumer_invoice_pdf(billing_period, line),
+                    file_name=f"facture_{billing_period}_{(line['name'] or 'membre').replace(' ', '_')}.pdf",
+                    mime="application/pdf", key=f"pdf_cons_line_{line['id']}",
+                )
+
+            st.markdown(f"**Versements producteurs -- {billing_period}**")
+            for line in billing_detail["producers"]:
+                lp1, lp2, lp3, lp4, lp5 = st.columns([3, 2, 2, 2, 2])
+                lp1.markdown(f"**{line['name'] or '(sans nom)'}**")
+                lp2.caption(f"{line['kwh_produced']:.1f} kWh produits")
+                lp3.caption(f"{line['amount_eur']:.2f} euros")
+                new_paid_p = lp4.checkbox(
+                    "Versee", value=bool(line["paid"]), key=f"paid_prod_line_{line['id']}",
+                )
+                if new_paid_p != bool(line["paid"]):
+                    set_producer_line_paid(line["id"], new_paid_p)
+                    st.rerun()
+                lp5.download_button(
+                    "PDF", data=generate_producer_statement_pdf(billing_period, line),
+                    file_name=f"releve_{billing_period}_{(line['name'] or 'membre').replace(' ', '_')}.pdf",
+                    mime="application/pdf", key=f"pdf_prod_line_{line['id']}",
+                )
+        else:
+            st.caption(f"Aucune facturation calculee pour {billing_period}.")
+
+        past_periods = [p["period"] for p in list_billing_periods()]
+        if past_periods:
+            st.caption("Periodes deja facturees : " + ", ".join(past_periods))
 
         with st.expander("Historique complet (tableau brut, toutes colonnes)"):
             st.markdown("**Producteurs**")

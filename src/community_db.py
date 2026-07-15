@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +86,44 @@ def _get_connection():
     conn.execute(
         "INSERT OR IGNORE INTO tariff_settings (id, acc_price_eur_kwh, turpe_reduced_eur_kwh, pmo_fee_pct) "
         "VALUES (1, 0.15, 0.02, 0.0)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS billing_periods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            acc_price_eur_kwh REAL NOT NULL,
+            turpe_reduced_eur_kwh REAL NOT NULL,
+            pmo_fee_pct REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS billing_consumer_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_id INTEGER NOT NULL REFERENCES billing_periods(id),
+            consumer_submission_id INTEGER NOT NULL REFERENCES consumer_submissions(id),
+            kwh_acc REAL NOT NULL,
+            amount_eur REAL NOT NULL,
+            paid INTEGER NOT NULL DEFAULT 0,
+            paid_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS billing_producer_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_id INTEGER NOT NULL REFERENCES billing_periods(id),
+            producer_submission_id INTEGER NOT NULL REFERENCES producer_submissions(id),
+            kwh_produced REAL NOT NULL,
+            amount_eur REAL NOT NULL,
+            paid INTEGER NOT NULL DEFAULT 0,
+            paid_at TEXT
+        )
+        """
     )
     conn.commit()
     return conn
@@ -388,6 +427,207 @@ def set_acc_tariff_settings(acc_price_eur_kwh, turpe_reduced_eur_kwh, pmo_fee_pc
             "UPDATE tariff_settings SET acc_price_eur_kwh = ?, turpe_reduced_eur_kwh = ?, "
             "pmo_fee_pct = ? WHERE id = 1",
             (float(acc_price_eur_kwh), float(turpe_reduced_eur_kwh), float(pmo_fee_pct)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ----------------------------------------------------------------------
+# Facturation mensuelle "mandataire" : Ivry Soleil Partage (PMO) facture
+# chaque consommateur au tarif ACC brut, preleve sa commission de gestion
+# et le TURPE reduit, puis redistribue le solde aux producteurs au
+# prorata de leur production sur la periode. C'est le modele standard
+# quand une PMO est mandatee par les producteurs pour simplifier la
+# facturation multi-producteurs/multi-consommateurs (cf. onglet
+# Administration > Facturation mensuelle) -- a valider par un-e
+# professionnel-le du droit/comptable avant toute facturation reelle.
+# ----------------------------------------------------------------------
+
+def get_billing_period(period):
+    """period : chaine 'AAAA-MM'. Renvoie le dict de la periode (tarifs
+    figes au moment du calcul) ou None si jamais calculee."""
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM billing_periods WHERE period = ?", (period,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_billing_periods():
+    conn = _get_connection()
+    try:
+        cur = conn.execute("SELECT * FROM billing_periods ORDER BY period DESC")
+        return _rows_to_dicts(cur.fetchall())
+    finally:
+        conn.close()
+
+
+def compute_billing_period(period, consumer_kwh, producer_kwh):
+    """
+    (Re)calcule et enregistre la facturation mandataire pour la periode
+    'AAAA-MM' donnee, a partir des kWh ACC saisis par l'administrateur-ice
+    pour chaque consommateur/producteur approuve : consumer_kwh et
+    producer_kwh sont des dicts {submission_id: kwh_du_mois}.
+
+    Principe : chaque consommateur doit (kwh_acc x tarif_brut_ACC). Le
+    total collecte est diminue du TURPE reduit (du a Enedis, pas a la
+    PMO) et de la commission de gestion PMO (pourcentage du tarif brut,
+    coherent avec Investment.effective_export_price utilise dans l'onglet
+    Producteur) ; le solde ("pool producteurs") est redistribue au
+    prorata de la production de chaque producteur sur la periode.
+
+    Un nouveau calcul pour une periode deja existante remplace les
+    lignes precedentes (permet de corriger une saisie). Renvoie un dict
+    de totaux ; le detail ligne par ligne se relit via
+    get_billing_period_detail(period).
+    """
+    if not re.match(r"^\d{4}-\d{2}$", period):
+        raise ValueError("La periode doit etre au format AAAA-MM (ex: 2026-07).")
+
+    acc_price, turpe_reduced, pmo_fee_pct = get_acc_tariff_settings()
+
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM billing_periods WHERE period = ?", (period,)
+        ).fetchone()
+        if row:
+            period_id = row["id"]
+            conn.execute("DELETE FROM billing_consumer_lines WHERE period_id = ?", (period_id,))
+            conn.execute("DELETE FROM billing_producer_lines WHERE period_id = ?", (period_id,))
+            conn.execute(
+                "UPDATE billing_periods SET acc_price_eur_kwh = ?, turpe_reduced_eur_kwh = ?, "
+                "pmo_fee_pct = ? WHERE id = ?",
+                (acc_price, turpe_reduced, pmo_fee_pct, period_id),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO billing_periods (period, created_at, acc_price_eur_kwh, "
+                "turpe_reduced_eur_kwh, pmo_fee_pct) VALUES (?, ?, ?, ?, ?)",
+                (period, _now(), acc_price, turpe_reduced, pmo_fee_pct),
+            )
+            period_id = cur.lastrowid
+
+        total_kwh_acc = 0.0
+        total_collected = 0.0
+        for consumer_id, kwh in consumer_kwh.items():
+            kwh = max(float(kwh or 0.0), 0.0)
+            if kwh <= 0:
+                continue
+            amount = kwh * acc_price
+            total_kwh_acc += kwh
+            total_collected += amount
+            conn.execute(
+                "INSERT INTO billing_consumer_lines (period_id, consumer_submission_id, "
+                "kwh_acc, amount_eur) VALUES (?, ?, ?, ?)",
+                (period_id, consumer_id, kwh, amount),
+            )
+
+        # Meme formule que Investment.effective_export_price (src/finance.py) :
+        # la commission PMO s'applique en pourcentage du tarif brut, le TURPE
+        # reduit se deduit ensuite en valeur absolue par kWh.
+        producer_pool_per_kwh = max(acc_price * (1 - pmo_fee_pct) - turpe_reduced, 0.0)
+        producer_pool_total = producer_pool_per_kwh * total_kwh_acc
+        turpe_amount = turpe_reduced * total_kwh_acc
+        pmo_commission = max(total_collected - producer_pool_total - turpe_amount, 0.0)
+
+        total_kwh_produced = sum(max(float(v or 0.0), 0.0) for v in producer_kwh.values())
+        total_paid_out = 0.0
+        if total_kwh_produced > 0:
+            for producer_id, kwh in producer_kwh.items():
+                kwh = max(float(kwh or 0.0), 0.0)
+                if kwh <= 0:
+                    continue
+                share = kwh / total_kwh_produced
+                amount = producer_pool_total * share
+                total_paid_out += amount
+                conn.execute(
+                    "INSERT INTO billing_producer_lines (period_id, producer_submission_id, "
+                    "kwh_produced, amount_eur) VALUES (?, ?, ?, ?)",
+                    (period_id, producer_id, kwh, amount),
+                )
+
+        conn.commit()
+        return {
+            "period_id": period_id,
+            "total_kwh_acc": total_kwh_acc,
+            "total_kwh_produced": total_kwh_produced,
+            "total_collected_eur": total_collected,
+            "turpe_amount_eur": turpe_amount,
+            "pmo_commission_eur": pmo_commission,
+            "producer_pool_eur": producer_pool_total,
+            "total_paid_out_eur": total_paid_out,
+        }
+    finally:
+        conn.close()
+
+
+def get_billing_period_detail(period):
+    """Renvoie {"period": {...}, "consumers": [...], "producers": [...]}
+    (lignes jointes aux soumissions pour le nom/email/adresse), ou None
+    si cette periode n'a jamais ete calculee."""
+    conn = _get_connection()
+    try:
+        period_row = conn.execute(
+            "SELECT * FROM billing_periods WHERE period = ?", (period,)
+        ).fetchone()
+        if not period_row:
+            return None
+        period_id = period_row["id"]
+
+        consumer_lines = conn.execute(
+            """
+            SELECT bcl.*, cs.name AS name, cs.email AS email, cs.address AS address
+            FROM billing_consumer_lines bcl
+            JOIN consumer_submissions cs ON cs.id = bcl.consumer_submission_id
+            WHERE bcl.period_id = ?
+            ORDER BY cs.name
+            """,
+            (period_id,),
+        ).fetchall()
+
+        producer_lines = conn.execute(
+            """
+            SELECT bpl.*, ps.name AS name, ps.email AS email, ps.address AS address
+            FROM billing_producer_lines bpl
+            JOIN producer_submissions ps ON ps.id = bpl.producer_submission_id
+            WHERE bpl.period_id = ?
+            ORDER BY ps.name
+            """,
+            (period_id,),
+        ).fetchall()
+
+        return {
+            "period": dict(period_row),
+            "consumers": _rows_to_dicts(consumer_lines),
+            "producers": _rows_to_dicts(producer_lines),
+        }
+    finally:
+        conn.close()
+
+
+def set_consumer_line_paid(line_id, paid):
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE billing_consumer_lines SET paid = ?, paid_at = ? WHERE id = ?",
+            (1 if paid else 0, _now() if paid else None, line_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_producer_line_paid(line_id, paid):
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE billing_producer_lines SET paid = ?, paid_at = ? WHERE id = ?",
+            (1 if paid else 0, _now() if paid else None, line_id),
         )
         conn.commit()
     finally:
