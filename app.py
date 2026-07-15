@@ -20,9 +20,12 @@ from src.community_db import (
     submit_producer, submit_consumer, list_producers, list_consumers,
     set_producer_status, set_consumer_status, get_approved_totals,
     get_targets, set_targets, get_acc_tariff_settings, set_acc_tariff_settings,
+    update_producer, delete_producer, update_consumer, delete_consumer,
     STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED,
 )
-from src.invoice_extraction import extract_invoice_data, InvoiceExtractionError
+from src.invoice_extraction import (
+    extract_invoice_data, extract_production_data, InvoiceExtractionError,
+)
 
 
 st.set_page_config(
@@ -668,6 +671,111 @@ with tab_producteur:
             "directement tes chiffres reels de production/consommation plus bas."
         )
 
+        with st.expander(
+            "\U0001F4E4 Remplir automatiquement via une facture EDF et/ou un "
+            "releve de production (optionnel)"
+        ):
+            st.caption(
+                "Envoie ta facture EDF (consommation) et/ou un releve de "
+                "production annuelle (export de ton app de suivi d'onduleur, "
+                "certificat...) : une IA (Claude, Anthropic) en extrait les "
+                "chiffres pour pre-remplir les champs ci-dessous, et calculer "
+                "a la fois le gain lie a l'autoconsommation de l'electricite "
+                "d'Ivry Soleil Partage et le gain lie a la revente du surplus. "
+                "Rien n'est conserve par Ivry Soleil Partage au-dela de cette "
+                "analyse ponctuelle."
+            )
+
+            server_anthropic_key_e = ""
+            try:
+                server_anthropic_key_e = st.secrets.get("ANTHROPIC_API_KEY", "")
+            except Exception:
+                server_anthropic_key_e = ""
+
+            if server_anthropic_key_e:
+                anthropic_api_key_e = server_anthropic_key_e
+            else:
+                st.warning(
+                    "Aucune cle configuree cote serveur. Le champ ci-dessous est "
+                    "uniquement pour un test local : ne l'utilise jamais sur une "
+                    "app publique.",
+                    icon="⚠️",
+                )
+                anthropic_api_key_e = st.text_input(
+                    "Cle API Anthropic (test local uniquement)", value="",
+                    type="password", key="_anthropic_key_existing",
+                    help="Stocke plutot la cle dans `.streamlit/secrets.toml` "
+                         "(ANTHROPIC_API_KEY = \"...\") pour un usage durable/deploye.",
+                )
+
+            ec1, ec2 = st.columns(2)
+            invoice_file_e = ec1.file_uploader(
+                "Facture EDF -- consommation (PDF, JPG ou PNG)",
+                type=["pdf", "png", "jpg", "jpeg"], key="_invoice_file_existing",
+            )
+            production_file_e = ec2.file_uploader(
+                "Releve de production annuelle (PDF, JPG ou PNG)",
+                type=["pdf", "png", "jpg", "jpeg"], key="_production_file_existing",
+            )
+
+            if st.button(
+                "Analyser les documents",
+                disabled=not (anthropic_api_key_e and (invoice_file_e or production_file_e)),
+                key="_analyze_existing",
+            ):
+                if invoice_file_e:
+                    with st.spinner("Analyse de la facture en cours..."):
+                        try:
+                            extracted_inv_e = extract_invoice_data(
+                                invoice_file_e.getvalue(), invoice_file_e.name,
+                                anthropic_api_key_e,
+                            )
+                        except InvoiceExtractionError as exc:
+                            st.session_state["_existing_invoice_error"] = str(exc)
+                        else:
+                            st.session_state["_existing_invoice_error"] = None
+                            conso_e = extracted_inv_e.get("consommation_annuelle_kwh")
+                            if conso_e:
+                                st.session_state["annual_consumption_existing"] = int(conso_e)
+                            full_name_e = (extracted_inv_e.get("titulaire_nom") or "").strip()
+                            if full_name_e:
+                                parts_e = full_name_e.split(None, 1)
+                                st.session_state["contact_first_name"] = parts_e[0]
+                                st.session_state["contact_last_name"] = (
+                                    parts_e[1] if len(parts_e) > 1 else ""
+                                )
+                            adresse_e = extracted_inv_e.get("adresse")
+                            if adresse_e:
+                                st.session_state["contact_address"] = adresse_e
+
+                if production_file_e:
+                    with st.spinner("Analyse du releve de production en cours..."):
+                        try:
+                            extracted_prod_e = extract_production_data(
+                                production_file_e.getvalue(), production_file_e.name,
+                                anthropic_api_key_e,
+                            )
+                        except InvoiceExtractionError as exc:
+                            st.session_state["_existing_production_error"] = str(exc)
+                        else:
+                            st.session_state["_existing_production_error"] = None
+                            prod_e = extracted_prod_e.get("production_annuelle_kwh")
+                            if prod_e:
+                                st.session_state["annual_production_existing"] = int(prod_e)
+                            export_e = extracted_prod_e.get("energie_exportee_kwh")
+                            if export_e:
+                                st.session_state["annual_export_existing"] = int(export_e)
+
+                st.success(
+                    "Documents analyses -- verifie les valeurs pre-remplies "
+                    "ci-dessous avant de calculer."
+                )
+
+            if st.session_state.get("_existing_invoice_error"):
+                st.error(st.session_state["_existing_invoice_error"])
+            if st.session_state.get("_existing_production_error"):
+                st.error(st.session_state["_existing_production_error"])
+
     if not is_existing_mode:
         with st.expander("\U0001F4E4 Remplir automatiquement via une facture EDF (optionnel)"):
             st.caption(
@@ -1142,16 +1250,18 @@ with tab_producteur:
                 "En mode \"installation existante\", ce calcul repart du cout "
                 "renseigne ci-dessus, pas du cout deja amorti."
             )
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Cout net apres aides", f"{investment.net_cost:.0f} euros")
-        k2.metric(
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Cout total avant aides", f"{total_capex:.0f} euros")
+        k2.metric("Cout net apres aides", f"{investment.net_cost:.0f} euros")
+        k3.metric(
             "Temps de retour",
             f"{payback:.1f} ans" if payback is not None else f"> {duration_years} ans",
         )
-        k3.metric("VAN", f"{van:.0f} euros")
+        k4.metric("VAN", f"{van:.0f} euros")
         if battery_capacity > 0 and not is_existing_mode:
             st.caption(
-                f"Dont cout batterie estime : {battery_capex:.0f} euros "
+                f"Le cout total avant aides inclut le PV ({capex_pv:.0f} euros) et la "
+                f"batterie estimee a {battery_capex:.0f} euros "
                 f"({battery_capacity:.1f} kWh x {battery_price_per_kwh:.0f} euros/kWh)."
             )
 
@@ -1442,51 +1552,174 @@ with tab_admin:
                 st.success("Tarif ACC mis a jour.")
                 st.rerun()
 
-        st.markdown("### \U0001F506 Soumissions producteurs en attente")
-        pending_producers = list_producers(status=STATUS_PENDING)
-        if not pending_producers:
-            st.caption("Aucune soumission en attente.")
-        for sub in pending_producers:
+        STATUS_LABELS = {
+            STATUS_PENDING: "en attente", STATUS_APPROVED: "approuve",
+            STATUS_REJECTED: "rejete",
+        }
+
+        st.markdown("### \U0001F506 Soumissions producteurs")
+        sort_prod = st.selectbox(
+            "Trier par",
+            ["Date (recent d'abord)", "Production (decroissant)", "Production (croissant)"],
+            key="_sort_producers",
+        )
+        all_producers_admin = list_producers()
+        if sort_prod == "Production (decroissant)":
+            all_producers_admin.sort(key=lambda s: s["annual_production_kwh"], reverse=True)
+        elif sort_prod == "Production (croissant)":
+            all_producers_admin.sort(key=lambda s: s["annual_production_kwh"])
+
+        if not all_producers_admin:
+            st.caption("Aucune soumission producteur.")
+        for sub in all_producers_admin:
             with st.container(border=True):
                 title = f"**{sub['name'] or '(sans nom)'}** -- {sub['annual_production_kwh']:.0f} kWh/an"
                 if sub["installed_kw"]:
                     title += f", {sub['installed_kw']:.1f} kWc"
+                title += f" -- *{STATUS_LABELS.get(sub['status'], sub['status'])}*"
                 st.markdown(title)
                 st.caption(
                     f"{sub['email']} -- {sub['address']} -- soumis le {sub['created_at'][:10]}"
                 )
-                bcol1, bcol2 = st.columns(2)
-                if bcol1.button("Approuver", key=f"approve_prod_{sub['id']}"):
-                    set_producer_status(sub["id"], STATUS_APPROVED)
-                    st.rerun()
-                if bcol2.button("Rejeter", key=f"reject_prod_{sub['id']}"):
-                    set_producer_status(sub["id"], STATUS_REJECTED)
+                bcol1, bcol2, bcol3, bcol4 = st.columns(4)
+                if sub["status"] != STATUS_APPROVED:
+                    if bcol1.button("Approuver", key=f"approve_prod_{sub['id']}"):
+                        set_producer_status(sub["id"], STATUS_APPROVED)
+                        st.rerun()
+                if sub["status"] != STATUS_REJECTED:
+                    if bcol2.button("Rejeter", key=f"reject_prod_{sub['id']}"):
+                        set_producer_status(sub["id"], STATUS_REJECTED)
+                        st.rerun()
+                edit_clicked = bcol3.button("Modifier", key=f"edit_prod_{sub['id']}")
+                if bcol4.button("Supprimer", key=f"delete_prod_{sub['id']}"):
+                    delete_producer(sub["id"])
                     st.rerun()
 
-        st.markdown("### \U0001F50C Soumissions consommateurs en attente")
-        pending_consumers = list_consumers(status=STATUS_PENDING)
-        if not pending_consumers:
-            st.caption("Aucune soumission en attente.")
-        for sub in pending_consumers:
+                editing_key = f"_editing_prod_{sub['id']}"
+                if edit_clicked:
+                    st.session_state[editing_key] = True
+                if st.session_state.get(editing_key):
+                    with st.form(f"edit_prod_form_{sub['id']}"):
+                        e1, e2 = st.columns(2)
+                        edit_name = e1.text_input("Nom", value=sub["name"] or "")
+                        edit_email = e2.text_input("Email", value=sub["email"] or "")
+                        e3, e4 = st.columns(2)
+                        edit_phone = e3.text_input("Telephone", value=sub["phone"] or "")
+                        edit_address = e4.text_input("Adresse", value=sub["address"] or "")
+                        e5, e6 = st.columns(2)
+                        edit_prod_kwh = e5.number_input(
+                            "Production annuelle (kWh)", min_value=0.0,
+                            value=float(sub["annual_production_kwh"]), step=100.0,
+                        )
+                        edit_kw = e6.number_input(
+                            "Puissance installee (kWc)", min_value=0.0,
+                            value=float(sub["installed_kw"] or 0.0), step=0.5,
+                        )
+                        save_col, cancel_col = st.columns(2)
+                        save_clicked = save_col.form_submit_button("Enregistrer")
+                        cancel_clicked = cancel_col.form_submit_button("Annuler")
+                    if save_clicked:
+                        try:
+                            update_producer(
+                                sub["id"], name=edit_name, email=edit_email,
+                                phone=edit_phone, address=edit_address,
+                                annual_production_kwh=edit_prod_kwh,
+                                installed_kw=edit_kw if edit_kw else None,
+                            )
+                        except Exception as exc:
+                            st.error(f"Erreur : {exc}")
+                        else:
+                            st.session_state[editing_key] = False
+                            st.rerun()
+                    if cancel_clicked:
+                        st.session_state[editing_key] = False
+                        st.rerun()
+
+        st.markdown("### \U0001F50C Soumissions consommateurs")
+        sort_cons = st.selectbox(
+            "Trier par",
+            ["Date (recent d'abord)", "Consommation (decroissant)", "Consommation (croissant)"],
+            key="_sort_consumers",
+        )
+        all_consumers_admin = list_consumers()
+        if sort_cons == "Consommation (decroissant)":
+            all_consumers_admin.sort(key=lambda s: s["annual_consumption_kwh"], reverse=True)
+        elif sort_cons == "Consommation (croissant)":
+            all_consumers_admin.sort(key=lambda s: s["annual_consumption_kwh"])
+
+        if not all_consumers_admin:
+            st.caption("Aucune soumission consommateur.")
+        for sub in all_consumers_admin:
             with st.container(border=True):
                 title = f"**{sub['name'] or '(sans nom)'}** -- {sub['annual_consumption_kwh']:.0f} kWh/an"
                 if sub["annual_acc_kwh"]:
                     title += f", {sub['annual_acc_kwh']:.0f} kWh via ACC"
+                title += f" -- *{STATUS_LABELS.get(sub['status'], sub['status'])}*"
                 st.markdown(title)
                 st.caption(
                     f"{sub['email']} -- {sub['address']} -- "
                     f"PDL {sub['pdl'] or 'non renseigne'} -- "
                     f"soumis le {sub['created_at'][:10]}"
                 )
-                bcol1, bcol2 = st.columns(2)
-                if bcol1.button("Approuver", key=f"approve_cons_{sub['id']}"):
-                    set_consumer_status(sub["id"], STATUS_APPROVED)
-                    st.rerun()
-                if bcol2.button("Rejeter", key=f"reject_cons_{sub['id']}"):
-                    set_consumer_status(sub["id"], STATUS_REJECTED)
+                bcol1, bcol2, bcol3, bcol4 = st.columns(4)
+                if sub["status"] != STATUS_APPROVED:
+                    if bcol1.button("Approuver", key=f"approve_cons_{sub['id']}"):
+                        set_consumer_status(sub["id"], STATUS_APPROVED)
+                        st.rerun()
+                if sub["status"] != STATUS_REJECTED:
+                    if bcol2.button("Rejeter", key=f"reject_cons_{sub['id']}"):
+                        set_consumer_status(sub["id"], STATUS_REJECTED)
+                        st.rerun()
+                edit_clicked = bcol3.button("Modifier", key=f"edit_cons_{sub['id']}")
+                if bcol4.button("Supprimer", key=f"delete_cons_{sub['id']}"):
+                    delete_consumer(sub["id"])
                     st.rerun()
 
-        with st.expander("Historique complet (approuves / rejetes / en attente)"):
+                editing_key = f"_editing_cons_{sub['id']}"
+                if edit_clicked:
+                    st.session_state[editing_key] = True
+                if st.session_state.get(editing_key):
+                    with st.form(f"edit_cons_form_{sub['id']}"):
+                        e1, e2 = st.columns(2)
+                        edit_name = e1.text_input("Nom", value=sub["name"] or "")
+                        edit_email = e2.text_input("Email", value=sub["email"] or "")
+                        e3, e4 = st.columns(2)
+                        edit_phone = e3.text_input("Telephone", value=sub["phone"] or "")
+                        edit_address = e4.text_input("Adresse", value=sub["address"] or "")
+                        e5, e6 = st.columns(2)
+                        edit_pdl = e5.text_input("PDL", value=sub["pdl"] or "")
+                        edit_identity = e6.text_input("Titulaire", value=sub["identity"] or "")
+                        e7, e8 = st.columns(2)
+                        edit_conso_kwh = e7.number_input(
+                            "Consommation annuelle (kWh)", min_value=0.0,
+                            value=float(sub["annual_consumption_kwh"]), step=100.0,
+                        )
+                        edit_acc_kwh = e8.number_input(
+                            "Energie ACC (kWh)", min_value=0.0,
+                            value=float(sub["annual_acc_kwh"] or 0.0), step=100.0,
+                        )
+                        save_col, cancel_col = st.columns(2)
+                        save_clicked = save_col.form_submit_button("Enregistrer")
+                        cancel_clicked = cancel_col.form_submit_button("Annuler")
+                    if save_clicked:
+                        try:
+                            update_consumer(
+                                sub["id"], name=edit_name, email=edit_email,
+                                phone=edit_phone, address=edit_address,
+                                pdl=edit_pdl, identity=edit_identity,
+                                annual_consumption_kwh=edit_conso_kwh,
+                                annual_acc_kwh=edit_acc_kwh,
+                            )
+                        except Exception as exc:
+                            st.error(f"Erreur : {exc}")
+                        else:
+                            st.session_state[editing_key] = False
+                            st.rerun()
+                    if cancel_clicked:
+                        st.session_state[editing_key] = False
+                        st.rerun()
+
+        with st.expander("Historique complet (tableau brut, toutes colonnes)"):
             st.markdown("**Producteurs**")
             all_producers = list_producers()
             if all_producers:

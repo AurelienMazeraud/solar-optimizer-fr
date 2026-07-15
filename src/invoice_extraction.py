@@ -34,6 +34,32 @@ consommation sur une autre periode l'est (ex: facture mensuelle, ou releve
 sur 2 mois), essaie de l'annualiser et indique-le dans "autres_infos_utiles".
 """
 
+PRODUCTION_EXTRACTION_PROMPT = """Tu recois un document (PDF, capture d'ecran ou export)
+resumant la production annuelle d'une installation photovoltaique deja en
+service -- typiquement issu d'une application de suivi d'onduleur (Enphase,
+SolarEdge, Huawei, SMA...), d'un certificat de production, ou d'un bilan
+annuel du gestionnaire de reseau. Le format peut varier enormement : adapte-toi.
+
+Extrais les informations suivantes et reponds UNIQUEMENT avec un objet JSON
+valide (pas de texte avant/apres, pas de commentaire), avec exactement ces
+cles. Mets `null` pour toute valeur absente ou illisible -- n'invente rien.
+
+{
+  "production_annuelle_kwh": nombre ou null,   // production totale sur 12 mois
+  "energie_exportee_kwh": nombre ou null,       // part revendue/injectee sur le reseau, si indiquee
+  "puissance_installee_kwc": nombre ou null,
+  "periode_debut": string ou null,              // date ISO (AAAA-MM-JJ) si trouvable
+  "periode_fin": string ou null,
+  "autres_infos_utiles": object ou null,
+  "confiance": string ou null                   // "haute", "moyenne" ou "basse"
+}
+
+Si la production annuelle n'est pas directement indiquee mais qu'une
+production sur une autre periode l'est (ex: releve mensuel ou trimestriel),
+essaie de l'annualiser (somme sur 12 mois glissants ou extrapolation) et
+indique-le dans "autres_infos_utiles".
+"""
+
 
 class InvoiceExtractionError(Exception):
     """Erreur levee lors de l'extraction de donnees depuis une facture
@@ -73,12 +99,12 @@ def _extract_json(text):
     )
 
 
-def extract_invoice_data(file_bytes, filename, api_key, model=DEFAULT_MODEL, timeout=60.0):
+def _call_extraction(file_bytes, filename, api_key, prompt, model=DEFAULT_MODEL, timeout=60.0):
     """
-    Envoie une facture (PDF ou image) a l'API Claude (Anthropic) et renvoie
-    un dict avec les champs extraits (voir EXTRACTION_PROMPT pour la liste
-    exacte). Leve InvoiceExtractionError avec un message clair en cas
-    d'echec (cle invalide, reseau, reponse non exploitable).
+    Envoie un document (PDF ou image) a l'API Claude (Anthropic) avec le
+    prompt d'extraction fourni, et renvoie le dict JSON obtenu. Leve
+    InvoiceExtractionError avec un message clair en cas d'echec (cle
+    invalide, reseau, reponse non exploitable).
 
     Aucune donnee n'est stockee cote Anthropic au-dela du traitement de la
     requete (comportement standard de l'API) ; le fichier n'est conserve
@@ -88,7 +114,7 @@ def extract_invoice_data(file_bytes, filename, api_key, model=DEFAULT_MODEL, tim
     if not api_key:
         raise InvoiceExtractionError("Aucune cle API Anthropic renseignee.")
     if not file_bytes:
-        raise InvoiceExtractionError("Fichier de facture vide ou illisible.")
+        raise InvoiceExtractionError("Fichier vide ou illisible.")
 
     media_type = _guess_media_type(filename)
     b64_data = base64.b64encode(file_bytes).decode("ascii")
@@ -105,7 +131,7 @@ def extract_invoice_data(file_bytes, filename, api_key, model=DEFAULT_MODEL, tim
             max_tokens=1500,
             messages=[{
                 "role": "user",
-                "content": [content_block, {"type": "text", "text": EXTRACTION_PROMPT}],
+                "content": [content_block, {"type": "text", "text": prompt}],
             }],
             timeout=timeout,
         )
@@ -129,3 +155,24 @@ def extract_invoice_data(file_bytes, filename, api_key, model=DEFAULT_MODEL, tim
         raise InvoiceExtractionError("Reponse vide de l'API Anthropic.")
 
     return _extract_json(raw_text)
+
+
+def extract_invoice_data(file_bytes, filename, api_key, model=DEFAULT_MODEL, timeout=60.0):
+    """
+    Envoie une facture (PDF ou image) a l'API Claude (Anthropic) et renvoie
+    un dict avec les champs extraits (voir EXTRACTION_PROMPT pour la liste
+    exacte).
+    """
+    return _call_extraction(file_bytes, filename, api_key, EXTRACTION_PROMPT, model, timeout)
+
+
+def extract_production_data(file_bytes, filename, api_key, model=DEFAULT_MODEL, timeout=60.0):
+    """
+    Envoie un releve/export de production annuelle (app de monitoring
+    d'onduleur, certificat, bilan...) a l'API Claude et renvoie un dict avec
+    les champs extraits (voir PRODUCTION_EXTRACTION_PROMPT). Complementaire a
+    extract_invoice_data (qui porte sur la consommation, pas la production).
+    """
+    return _call_extraction(
+        file_bytes, filename, api_key, PRODUCTION_EXTRACTION_PROMPT, model, timeout,
+    )

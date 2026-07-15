@@ -196,6 +196,97 @@ def list_consumers(status=None):
         conn.close()
 
 
+def update_producer(submission_id, name=None, email=None, phone=None, address=None,
+                     annual_production_kwh=None, installed_kw=None):
+    """Met a jour les champs fournis (non None) d'une soumission producteur --
+    utilise par l'onglet Administration pour corriger une soumission (coquille,
+    erreur de saisie...) sans avoir a la supprimer/recreer."""
+    fields = {}
+    if name is not None:
+        fields["name"] = name.strip()
+    if email is not None:
+        fields["email"] = email.strip()
+    if phone is not None:
+        fields["phone"] = phone.strip()
+    if address is not None:
+        fields["address"] = address.strip()
+    if annual_production_kwh is not None:
+        if annual_production_kwh <= 0:
+            raise ValueError("La production annuelle doit etre superieure a 0.")
+        fields["annual_production_kwh"] = float(annual_production_kwh)
+    if installed_kw is not None:
+        fields["installed_kw"] = float(installed_kw) if installed_kw else None
+    if not fields:
+        return
+    conn = _get_connection()
+    try:
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(
+            f"UPDATE producer_submissions SET {set_clause} WHERE id = ?",
+            (*fields.values(), submission_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_producer(submission_id):
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM producer_submissions WHERE id = ?", (submission_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_consumer(submission_id, name=None, email=None, phone=None, address=None,
+                     pdl=None, identity=None, annual_consumption_kwh=None,
+                     annual_acc_kwh=None, estimated_savings_eur=None):
+    """Met a jour les champs fournis (non None) d'une soumission consommateur."""
+    fields = {}
+    if name is not None:
+        fields["name"] = name.strip()
+    if email is not None:
+        fields["email"] = email.strip()
+    if phone is not None:
+        fields["phone"] = phone.strip()
+    if address is not None:
+        fields["address"] = address.strip()
+    if pdl is not None:
+        fields["pdl"] = pdl.strip()
+    if identity is not None:
+        fields["identity"] = identity.strip()
+    if annual_consumption_kwh is not None:
+        if annual_consumption_kwh <= 0:
+            raise ValueError("La consommation annuelle doit etre superieure a 0.")
+        fields["annual_consumption_kwh"] = float(annual_consumption_kwh)
+    if annual_acc_kwh is not None:
+        fields["annual_acc_kwh"] = float(annual_acc_kwh)
+    if estimated_savings_eur is not None:
+        fields["estimated_savings_eur"] = float(estimated_savings_eur)
+    if not fields:
+        return
+    conn = _get_connection()
+    try:
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(
+            f"UPDATE consumer_submissions SET {set_clause} WHERE id = ?",
+            (*fields.values(), submission_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_consumer(submission_id):
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM consumer_submissions WHERE id = ?", (submission_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def set_producer_status(submission_id, status, admin_note=None):
     if status not in (STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED):
         raise ValueError(f"Statut invalide : {status}")
