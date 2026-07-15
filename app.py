@@ -220,7 +220,30 @@ st.markdown(
     """
     <style>
     .stApp {
-        background: linear-gradient(180deg, #FFF8EC 0%, #FDEEDC 45%, #FBEAE3 100%);
+        background: linear-gradient(180deg, #FFF8EC 0%, #FCEBDD 25%, #F8DCD3 50%,
+                    #F2CDD3 75%, #E9C4D6 100%);
+        background-attachment: fixed;
+    }
+
+    /* Cartes de section (relief autour des grands blocs de contenu) */
+    .section-card {
+        border-radius: 22px;
+        padding: 22px 26px 6px 26px;
+        margin: 6px 0 24px 0;
+        box-shadow: 0 8px 24px rgba(122, 53, 104, 0.12);
+        border: 1px solid rgba(198, 69, 106, 0.16);
+    }
+    .section-card--location {
+        background: linear-gradient(160deg, #FFF6E9 0%, #FDEBDD 100%);
+    }
+    .section-card--energy {
+        background: linear-gradient(160deg, #FFF3EA 0%, #FBE3DD 100%);
+    }
+    .section-card--finance {
+        background: linear-gradient(160deg, #FCEAE6 0%, #F6DCE1 100%);
+    }
+    .section-card--join {
+        background: linear-gradient(160deg, #F8E3E7 0%, #F0D3DE 100%);
     }
 
     /* Onglets */
@@ -267,20 +290,20 @@ st.markdown(
     div[data-testid="stButton"] button,
     div[data-testid="stFormSubmitButton"] button,
     div[data-testid="stDownloadButton"] button {
-        background: linear-gradient(135deg, #FF9A5C 0%, #F2685F 45%, #C6456A 75%, #7A3568 100%);
+        background: linear-gradient(135deg, #FF8F56 0%, #EF5F6B 40%, #B23E6E 72%, #632A56 100%);
         color: white;
         border: none;
         border-radius: 999px;
         padding: 0.55rem 1.4rem;
         font-weight: 600;
-        box-shadow: 0 4px 12px rgba(198, 69, 106, 0.30);
+        box-shadow: 0 4px 14px rgba(99, 42, 86, 0.35);
         transition: transform 0.15s ease, box-shadow 0.15s ease;
     }
     div[data-testid="stButton"] button:hover,
     div[data-testid="stFormSubmitButton"] button:hover,
     div[data-testid="stDownloadButton"] button:hover {
         transform: translateY(-1px);
-        box-shadow: 0 6px 18px rgba(122, 53, 104, 0.40);
+        box-shadow: 0 6px 20px rgba(99, 42, 86, 0.46);
         color: white;
     }
 
@@ -314,6 +337,8 @@ producer_contribution = st.session_state.get("_producer_contribution")
 consumer_contribution = st.session_state.get("_consumer_contribution")
 
 with tab_producteur:
+
+    st.markdown('<div class="section-card section-card--location">', unsafe_allow_html=True)
 
     st.subheader("Quel est ton profil ?")
     mode = st.radio(
@@ -950,6 +975,8 @@ with tab_producteur:
             if st.session_state.get("_invoice_error_producteur"):
                 st.error(st.session_state["_invoice_error_producteur"])
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
     # ------------------------------------------------------------------
     # Le reste (consommation ou donnees reelles, batterie, financement,
     # tarifs) n'a pas besoin de reactivite immediate : ca reste dans un
@@ -1081,6 +1108,7 @@ with tab_producteur:
         loan_rate = 0.0
         loan_duration = 0
         if not is_existing_mode:
+            st.markdown('<div class="section-card section-card--finance">', unsafe_allow_html=True)
             st.subheader("\U0001F4B6 Investissement & financement")
             with st.expander("Pourquoi ces informations ?"):
                 st.markdown(
@@ -1109,6 +1137,7 @@ with tab_producteur:
             loan_duration = c3.number_input(
                 "Duree du pret (annees)", min_value=0, max_value=25, value=0, step=1,
             )
+            st.markdown('</div>', unsafe_allow_html=True)
 
         st.subheader("\U0001F4A1 Tarifs & hypotheses economiques")
         with st.expander("Pourquoi ces informations ?"):
@@ -1307,6 +1336,7 @@ with tab_producteur:
 
         st.success("Calcul termine.")
 
+        st.markdown('<div class="section-card section-card--energy">', unsafe_allow_html=True)
         st.subheader("Resultats -- energie")
         with st.expander("Comment lire ces resultats ?"):
             st.markdown(
@@ -1349,7 +1379,10 @@ with tab_producteur:
             cycles = battery_charge_kwh / battery_capacity if battery_capacity else 0
             k3.metric("Cycles equivalents / an", f"{cycles:.0f}")
 
+        st.markdown('</div>', unsafe_allow_html=True)
+
         if not is_existing_mode:
+            st.markdown('<div class="section-card section-card--finance">', unsafe_allow_html=True)
             st.subheader("Resultats -- investissement")
             with st.expander("Comment lire ces resultats ?"):
                 st.markdown(
@@ -1374,6 +1407,7 @@ with tab_producteur:
                     f"batterie estimee a {battery_capex:.0f} euros "
                     f"({battery_capacity:.1f} kWh x {battery_price_per_kwh:.0f} euros/kWh)."
                 )
+            st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("**Repartition du gain annuel (annee 1)**")
         gain_autoconsommation = float(cf["Savings"].iloc[0])
@@ -1422,6 +1456,7 @@ with tab_producteur:
             )
 
         if not is_existing_mode:
+            st.markdown('<div class="section-card section-card--finance">', unsafe_allow_html=True)
             fig2 = go.Figure()
             fig2.add_trace(go.Scatter(
                 x=cf["Year"], y=cf["CumulativeNet"], mode="lines+markers", name="Cashflow cumule",
@@ -1439,6 +1474,7 @@ with tab_producteur:
                     if _col in cf_display.columns:
                         cf_display[_col] = cf_display[_col].round(0)
                 st.dataframe(cf_display, width="stretch")
+            st.markdown('</div>', unsafe_allow_html=True)
 
         producer_contribution = {
             "annual_production_kwh": float(annual_production),
@@ -2017,6 +2053,7 @@ with tab_admin:
 # volet producteur/consommateur utilise.
 # ------------------------------------------------------------------
 st.divider()
+st.markdown('<div class="section-card section-card--join">', unsafe_allow_html=True)
 st.subheader("\U0001F91D Rejoindre Ivry Soleil Partage")
 st.caption(
     "Tu veux rejoindre Ivry Soleil Partage et contribuer a sa production et "
@@ -2180,3 +2217,5 @@ if contact_submitted:
 
             messages.append("Ivry Soleil Partage te recontactera bientot.")
             st.success("Merci ! " + " ".join(messages))
+
+st.markdown('</div>', unsafe_allow_html=True)
