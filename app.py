@@ -181,16 +181,18 @@ cfg = load_defaults()
 st.markdown(
     """
     <div style="
-        background: linear-gradient(135deg, #FFD54F 0%, #FFA726 45%, #66BB6A 100%);
+        background: linear-gradient(135deg, #FFE9B8 0%, #FFB870 20%, #FF8F6B 40%,
+                    #F2685F 58%, #C6456A 75%, #7A3568 90%, #4E2A54 100%);
         border-radius: 20px;
         padding: 28px 32px;
         margin-bottom: 4px;
-        box-shadow: 0 10px 28px rgba(255, 152, 0, 0.22);
+        box-shadow: 0 10px 28px rgba(120, 40, 70, 0.28);
     ">
-        <div style="font-size:2.5rem; font-weight:800; color:#1b3a2b; line-height:1.1;">
+        <div style="font-size:2.5rem; font-weight:800; color:#fff; line-height:1.1;
+                    text-shadow: 0 2px 10px rgba(0,0,0,0.18);">
             ☀️ Ivry Soleil Partage
         </div>
-        <div style="font-size:1.05rem; color:#2b4a3a; margin-top:6px; font-weight:500;">
+        <div style="font-size:1.05rem; color:#FFF3E6; margin-top:6px; font-weight:500;">
             Autoconsommation collective &amp; calculateur solaire
         </div>
     </div>
@@ -218,7 +220,7 @@ st.markdown(
     """
     <style>
     .stApp {
-        background: linear-gradient(180deg, #FFFDF5 0%, #FFF6E0 45%, #FFF9F0 100%);
+        background: linear-gradient(180deg, #FFF8EC 0%, #FDEEDC 45%, #FBEAE3 100%);
     }
 
     /* Onglets */
@@ -230,14 +232,14 @@ st.markdown(
         flex: 1 1 0;
         padding: 22px 24px !important;
         border-radius: 14px 14px 0 0 !important;
-        background: linear-gradient(135deg, #FFF3D6 0%, #FFE8C2 100%) !important;
+        background: linear-gradient(135deg, #FBE4CE 0%, #F6D2C4 100%) !important;
         transition: all 0.2s ease;
     }
     .stTabs [data-baseweb="tab-list"] button:hover {
-        background: linear-gradient(135deg, #FFE8B8 0%, #FFDCA0 100%) !important;
+        background: linear-gradient(135deg, #F7D2AE 0%, #F0B8A8 100%) !important;
     }
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #FFB300 0%, #FB8C00 100%) !important;
+        background: linear-gradient(135deg, #FF8F6B 0%, #C6456A 100%) !important;
     }
     .stTabs [aria-selected="true"] [data-testid="stMarkdownContainer"] p {
         color: white !important;
@@ -251,41 +253,41 @@ st.markdown(
 
     /* Metriques (cartes) */
     div[data-testid="stMetric"] {
-        background: linear-gradient(135deg, #ffffff 0%, #FFFBF2 100%);
+        background: linear-gradient(135deg, #ffffff 0%, #FFF5EC 100%);
         border-radius: 16px;
         padding: 16px 18px;
-        box-shadow: 0 4px 14px rgba(255, 152, 0, 0.12);
-        border: 1px solid #FFE9C2;
+        box-shadow: 0 4px 14px rgba(198, 69, 106, 0.14);
+        border: 1px solid #F6D9CB;
     }
     div[data-testid="stMetricValue"] {
-        color: #E65100;
+        color: #C6456A;
     }
 
     /* Boutons (normaux, formulaires, telechargement) */
     div[data-testid="stButton"] button,
     div[data-testid="stFormSubmitButton"] button,
     div[data-testid="stDownloadButton"] button {
-        background: linear-gradient(135deg, #FFB300 0%, #FB8C00 55%, #43A047 100%);
+        background: linear-gradient(135deg, #FF9A5C 0%, #F2685F 45%, #C6456A 75%, #7A3568 100%);
         color: white;
         border: none;
         border-radius: 999px;
         padding: 0.55rem 1.4rem;
         font-weight: 600;
-        box-shadow: 0 4px 12px rgba(251, 140, 0, 0.28);
+        box-shadow: 0 4px 12px rgba(198, 69, 106, 0.30);
         transition: transform 0.15s ease, box-shadow 0.15s ease;
     }
     div[data-testid="stButton"] button:hover,
     div[data-testid="stFormSubmitButton"] button:hover,
     div[data-testid="stDownloadButton"] button:hover {
         transform: translateY(-1px);
-        box-shadow: 0 6px 18px rgba(251, 140, 0, 0.38);
+        box-shadow: 0 6px 18px rgba(122, 53, 104, 0.40);
         color: white;
     }
 
     /* Expanders */
     div[data-testid="stExpander"] {
         border-radius: 14px;
-        border: 1px solid #FFE3B3;
+        border: 1px solid #F6D2C4;
         overflow: hidden;
     }
 
