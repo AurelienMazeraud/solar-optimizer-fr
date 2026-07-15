@@ -178,7 +178,25 @@ def new_pan(tilt=30, azimuth=180, width=4.0, height=4.0, orientation="Portrait")
 
 cfg = load_defaults()
 
-st.title("☀️ Ivry Soleil Partage")
+st.markdown(
+    """
+    <div style="
+        background: linear-gradient(135deg, #FFD54F 0%, #FFA726 45%, #66BB6A 100%);
+        border-radius: 20px;
+        padding: 28px 32px;
+        margin-bottom: 4px;
+        box-shadow: 0 10px 28px rgba(255, 152, 0, 0.22);
+    ">
+        <div style="font-size:2.5rem; font-weight:800; color:#1b3a2b; line-height:1.1;">
+            ☀️ Ivry Soleil Partage
+        </div>
+        <div style="font-size:1.05rem; color:#2b4a3a; margin-top:6px; font-weight:500;">
+            Autoconsommation collective &amp; calculateur solaire
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.divider()
 st.subheader("\U0001F50B Ivry Soleil Partage -- la communaute en un coup d'oeil")
@@ -199,19 +217,81 @@ st.divider()
 st.markdown(
     """
     <style>
+    .stApp {
+        background: linear-gradient(180deg, #FFFDF5 0%, #FFF6E0 45%, #FFF9F0 100%);
+    }
+
+    /* Onglets */
     .stTabs [data-baseweb="tab-list"] {
         gap: 12px;
         width: 100%;
     }
     .stTabs [data-baseweb="tab-list"] button {
         flex: 1 1 0;
-        padding: 26px 28px !important;
+        padding: 22px 24px !important;
+        border-radius: 14px 14px 0 0 !important;
+        background: linear-gradient(135deg, #FFF3D6 0%, #FFE8C2 100%) !important;
+        transition: all 0.2s ease;
+    }
+    .stTabs [data-baseweb="tab-list"] button:hover {
+        background: linear-gradient(135deg, #FFE8B8 0%, #FFDCA0 100%) !important;
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #FFB300 0%, #FB8C00 100%) !important;
+    }
+    .stTabs [aria-selected="true"] [data-testid="stMarkdownContainer"] p {
+        color: white !important;
     }
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        font-size: 2rem !important;
+        font-size: 1.7rem !important;
         font-weight: 700 !important;
         text-align: center;
         width: 100%;
+    }
+
+    /* Metriques (cartes) */
+    div[data-testid="stMetric"] {
+        background: linear-gradient(135deg, #ffffff 0%, #FFFBF2 100%);
+        border-radius: 16px;
+        padding: 16px 18px;
+        box-shadow: 0 4px 14px rgba(255, 152, 0, 0.12);
+        border: 1px solid #FFE9C2;
+    }
+    div[data-testid="stMetricValue"] {
+        color: #E65100;
+    }
+
+    /* Boutons (normaux, formulaires, telechargement) */
+    div[data-testid="stButton"] button,
+    div[data-testid="stFormSubmitButton"] button,
+    div[data-testid="stDownloadButton"] button {
+        background: linear-gradient(135deg, #FFB300 0%, #FB8C00 55%, #43A047 100%);
+        color: white;
+        border: none;
+        border-radius: 999px;
+        padding: 0.55rem 1.4rem;
+        font-weight: 600;
+        box-shadow: 0 4px 12px rgba(251, 140, 0, 0.28);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    div[data-testid="stButton"] button:hover,
+    div[data-testid="stFormSubmitButton"] button:hover,
+    div[data-testid="stDownloadButton"] button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 18px rgba(251, 140, 0, 0.38);
+        color: white;
+    }
+
+    /* Expanders */
+    div[data-testid="stExpander"] {
+        border-radius: 14px;
+        border: 1px solid #FFE3B3;
+        overflow: hidden;
+    }
+
+    /* Conteneurs avec bordure (cartes de pans, lignes admin...) */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 14px !important;
     }
     </style>
     """,
@@ -769,6 +849,16 @@ with tab_producteur:
                             export_e = extracted_prod_e.get("energie_exportee_kwh")
                             if export_e:
                                 st.session_state["annual_export_existing"] = int(export_e)
+                            periode_ref = (
+                                extracted_prod_e.get("periode_fin")
+                                or extracted_prod_e.get("periode_debut")
+                            )
+                            if periode_ref:
+                                match_year = re.match(r"^(\d{4})", str(periode_ref))
+                                if match_year:
+                                    st.session_state["_production_reference_year"] = int(
+                                        match_year.group(1)
+                                    )
 
                 st.success(
                     "Documents analyses -- verifie les valeurs pre-remplies "
@@ -983,36 +1073,40 @@ with tab_producteur:
                 "de consommation/production/injection ci-dessus."
             )
 
-        st.subheader("\U0001F4B6 Investissement & financement")
-        with st.expander("Pourquoi ces informations ?"):
-            st.markdown(
-                "Le **cout de l'installation** est le prix total avant aides "
-                "(materiel + pose). Les **aides/subventions** viennent en "
-                "deduction directe. Le reste peut etre paye cash (**apport**) ou "
-                "finance par un **pret** (taux + duree) -- un pret etale la "
-                "depense mais ajoute des interets, ce qui retarde le moment ou "
-                "l'installation devient rentable. En mode \"installation "
-                "existante\", renseigne le cout reel deja engage pour voir ou tu "
-                "en es de ton retour sur investissement."
+        capex_pv = 0
+        subsidies = 0
+        down_payment = 0
+        loan_rate = 0.0
+        loan_duration = 0
+        if not is_existing_mode:
+            st.subheader("\U0001F4B6 Investissement & financement")
+            with st.expander("Pourquoi ces informations ?"):
+                st.markdown(
+                    "Le **cout de l'installation** est le prix total avant aides "
+                    "(materiel + pose). Les **aides/subventions** viennent en "
+                    "deduction directe. Le reste peut etre paye cash (**apport**) ou "
+                    "finance par un **pret** (taux + duree) -- un pret etale la "
+                    "depense mais ajoute des interets, ce qui retarde le moment ou "
+                    "l'installation devient rentable."
+                )
+            c1, c2 = st.columns(2)
+            capex_pv = c1.number_input(
+                "Cout de l'installation PV, avant aides (euros)",
+                min_value=0, max_value=200000, value=15000, step=500,
             )
-        c1, c2 = st.columns(2)
-        capex_pv = c1.number_input(
-            "Cout de l'installation PV, avant aides (euros)",
-            min_value=0, max_value=200000, value=15000, step=500,
-        )
-        subsidies = c2.number_input(
-            "Aides / subventions (euros)", min_value=0, max_value=50000, value=0, step=100,
-        )
-        c1, c2, c3 = st.columns(3)
-        down_payment = c1.number_input(
-            "Apport personnel (euros)", min_value=0, max_value=200000, value=15000, step=500,
-        )
-        loan_rate = c2.number_input(
-            "Taux du pret (%/an)", min_value=0.0, max_value=15.0, value=0.0, step=0.1,
-        ) / 100
-        loan_duration = c3.number_input(
-            "Duree du pret (annees)", min_value=0, max_value=25, value=0, step=1,
-        )
+            subsidies = c2.number_input(
+                "Aides / subventions (euros)", min_value=0, max_value=50000, value=0, step=100,
+            )
+            c1, c2, c3 = st.columns(3)
+            down_payment = c1.number_input(
+                "Apport personnel (euros)", min_value=0, max_value=200000, value=15000, step=500,
+            )
+            loan_rate = c2.number_input(
+                "Taux du pret (%/an)", min_value=0.0, max_value=15.0, value=0.0, step=0.1,
+            ) / 100
+            loan_duration = c3.number_input(
+                "Duree du pret (annees)", min_value=0, max_value=25, value=0, step=1,
+            )
 
         st.subheader("\U0001F4A1 Tarifs & hypotheses economiques")
         with st.expander("Pourquoi ces informations ?"):
@@ -1226,6 +1320,11 @@ with tab_producteur:
         else:
             k1.metric("Puissance installee", "non renseignee")
         k2.metric("Production annuelle", f"{annual_production:.0f} kWh")
+        if is_existing_mode:
+            reference_year = st.session_state.get(
+                "_production_reference_year", dt.date.today().year
+            )
+            k2.caption(f"Base sur l'annee {reference_year}")
         k3.metric("Consommation annuelle", f"{annual_consumption:.0f} kWh")
         k4.metric("Taux d'autoconsommation", f"{self_consumption_rate * 100:.0f} %")
 
@@ -1248,32 +1347,31 @@ with tab_producteur:
             cycles = battery_charge_kwh / battery_capacity if battery_capacity else 0
             k3.metric("Cycles equivalents / an", f"{cycles:.0f}")
 
-        st.subheader("Resultats -- investissement")
-        with st.expander("Comment lire ces resultats ?"):
-            st.markdown(
-                "Le **temps de retour** est le nombre d'annees necessaires pour "
-                "que les economies + revenus cumules compensent le cout net de "
-                "l'installation. La **VAN** (valeur actuelle nette) resume tout "
-                "le projet en un seul chiffre en euros d'aujourd'hui : positive, "
-                "elle signifie que le projet est rentable sur la duree choisie ; "
-                "negative, qu'il ne l'est pas (ou pas encore, sur cette duree). "
-                "En mode \"installation existante\", ce calcul repart du cout "
-                "renseigne ci-dessus, pas du cout deja amorti."
+        if not is_existing_mode:
+            st.subheader("Resultats -- investissement")
+            with st.expander("Comment lire ces resultats ?"):
+                st.markdown(
+                    "Le **temps de retour** est le nombre d'annees necessaires pour "
+                    "que les economies + revenus cumules compensent le cout net de "
+                    "l'installation. La **VAN** (valeur actuelle nette) resume tout "
+                    "le projet en un seul chiffre en euros d'aujourd'hui : positive, "
+                    "elle signifie que le projet est rentable sur la duree choisie ; "
+                    "negative, qu'il ne l'est pas (ou pas encore, sur cette duree)."
+                )
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Cout total avant aides", f"{total_capex:.0f} euros")
+            k2.metric("Cout net apres aides", f"{investment.net_cost:.0f} euros")
+            k3.metric(
+                "Temps de retour",
+                f"{payback:.1f} ans" if payback is not None else f"> {duration_years} ans",
             )
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Cout total avant aides", f"{total_capex:.0f} euros")
-        k2.metric("Cout net apres aides", f"{investment.net_cost:.0f} euros")
-        k3.metric(
-            "Temps de retour",
-            f"{payback:.1f} ans" if payback is not None else f"> {duration_years} ans",
-        )
-        k4.metric("VAN", f"{van:.0f} euros")
-        if battery_capacity > 0 and not is_existing_mode:
-            st.caption(
-                f"Le cout total avant aides inclut le PV ({capex_pv:.0f} euros) et la "
-                f"batterie estimee a {battery_capex:.0f} euros "
-                f"({battery_capacity:.1f} kWh x {battery_price_per_kwh:.0f} euros/kWh)."
-            )
+            k4.metric("VAN", f"{van:.0f} euros")
+            if battery_capacity > 0:
+                st.caption(
+                    f"Le cout total avant aides inclut le PV ({capex_pv:.0f} euros) et la "
+                    f"batterie estimee a {battery_capex:.0f} euros "
+                    f"({battery_capacity:.1f} kWh x {battery_price_per_kwh:.0f} euros/kWh)."
+                )
 
         st.markdown("**Repartition du gain annuel (annee 1)**")
         gain_autoconsommation = float(cf["Savings"].iloc[0])
@@ -1321,23 +1419,24 @@ with tab_producteur:
                 "existante\" (donnees annuelles uniquement)."
             )
 
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(
-            x=cf["Year"], y=cf["CumulativeNet"], mode="lines+markers", name="Cashflow cumule",
-        ))
-        fig2.add_hline(y=0, line_dash="dash", line_color="gray")
-        fig2.update_layout(
-            title="Cashflow cumule sur la duree du projet",
-            xaxis_title="Annee", yaxis_title="euros",
-        )
-        st.plotly_chart(fig2, width="stretch")
+        if not is_existing_mode:
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(
+                x=cf["Year"], y=cf["CumulativeNet"], mode="lines+markers", name="Cashflow cumule",
+            ))
+            fig2.add_hline(y=0, line_dash="dash", line_color="gray")
+            fig2.update_layout(
+                title="Cashflow cumule sur la duree du projet",
+                xaxis_title="Annee", yaxis_title="euros",
+            )
+            st.plotly_chart(fig2, width="stretch")
 
-        with st.expander("Detail du cashflow annuel"):
-            cf_display = cf.copy()
-            for _col in ("Savings", "Sales", "GrossBenefit", "LoanPayment", "NetCashflow", "CumulativeNet"):
-                if _col in cf_display.columns:
-                    cf_display[_col] = cf_display[_col].round(0)
-            st.dataframe(cf_display, width="stretch")
+            with st.expander("Detail du cashflow annuel"):
+                cf_display = cf.copy()
+                for _col in ("Savings", "Sales", "GrossBenefit", "LoanPayment", "NetCashflow", "CumulativeNet"):
+                    if _col in cf_display.columns:
+                        cf_display[_col] = cf_display[_col].round(0)
+                st.dataframe(cf_display, width="stretch")
 
         producer_contribution = {
             "annual_production_kwh": float(annual_production),
